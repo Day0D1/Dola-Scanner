@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dola Options Scanner</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Dola</span>
+      <span class="brand-sub">Options Scanner</span>
+    </div>
+    <div class="topbar-actions">
+      <div class="scan-times">
+        <span id="scanTime" class="scan-time">–</span>
+        <span id="nextScan" class="scan-time next">next auto-scan: –</span>
+      </div>
+      <button id="refreshBtn" class="btn primary">Refresh scan</button>
+    </div>
+  </header>
+
+  <section class="breadth-panel">
+    <div class="breadth-verdict">
+      <div class="breadth-label">Market breadth</div>
+      <div id="breadthVerdict" class="breadth-value mixed">LOADING</div>
+    </div>
+    <div class="breadth-pillars">
+      <div class="pillar">
+        <div class="pillar-name">$SPX</div>
+        <div class="pillar-hint">P&amp;F column</div>
+        <div id="spxCol" class="pillar-value">–</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-name">$VIX</div>
+        <div class="pillar-hint">P&amp;F column</div>
+        <div id="vixCol" class="pillar-value">–</div>
+      </div>
+      <div class="pillar" id="bpnyaPillar">
+        <div class="pillar-name">$BPNYA <span class="pillar-tag">(self-computed)</span></div>
+        <div class="pillar-hint"><span id="bpnyaPct">–</span>% on P&amp;F buy signal</div>
+        <div id="bpnyaCol" class="pillar-value">–</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="controls">
+    <div class="controls-row">
+      <input id="searchInput" class="search" type="search" placeholder="Search ticker (e.g. AAPL)" autocomplete="off" />
+      <div class="chip-group" id="signalChips">
+        <button class="chip active" data-signal="ALL">All</button>
+        <button class="chip" data-signal="ENTRIES">Entries</button>
+        <button class="chip" data-signal="CANDIDATES">Candidates</button>
+        <button class="chip elon" data-signal="ELON">ELON</button>
+        <button class="chip musk" data-signal="MUSK">MUSK</button>
+      </div>
+      <div class="chip-group" id="rsiChips">
+        <button class="chip active" data-rsi="ALL">RSI: All</button>
+        <button class="chip" data-rsi="OVERSOLD">&lt; 30</button>
+        <button class="chip" data-rsi="OVERBOUGHT">&gt; 70</button>
+        <button class="chip" data-rsi="NEUTRAL">30-70</button>
+      </div>
+      <div class="chip-group" id="pnfChips">
+        <button class="chip active" data-pnf="ALL">P&amp;F: All</button>
+        <button class="chip" data-pnf="X">X</button>
+        <button class="chip" data-pnf="O">O</button>
+      </div>
+    </div>
+    <div class="controls-row">
+      <select id="sectorSelect" class="select">
+        <option value="ALL">All sectors</option>
+      </select>
+      <select id="sortSelect" class="select">
+        <option value="ticker_asc">Sort: Ticker A-Z</option>
+        <option value="ticker_desc">Sort: Ticker Z-A</option>
+        <option value="rsi_asc">Sort: RSI low-high</option>
+        <option value="rsi_desc">Sort: RSI high-low</option>
+        <option value="price_asc">Sort: Price low-high</option>
+        <option value="price_desc">Sort: Price high-low</option>
+        <option value="signal">Sort: Signal strength</option>
+      </select>
+      <div class="results-info"><span id="resultsCount">0</span> shown</div>
+    </div>
+  </section>
+
+  <section id="entriesSection" class="section hidden">
+    <div class="section-head">
+      <h2>Enter now <span id="entriesCount" class="count">0</span></h2>
+      <div class="section-hint">Candidate + P&amp;F aligned — pull the trigger</div>
+    </div>
+    <div id="entriesGrid" class="card-grid"></div>
+  </section>
+
+  <section id="candidatesSection" class="section hidden">
+    <div class="section-head">
+      <h2>Active candidates <span id="candidatesCount" class="count">0</span></h2>
+      <div class="section-hint">Signal fired — waiting for the P&amp;F flip</div>
+    </div>
+    <div id="candidatesGrid" class="card-grid"></div>
+  </section>
+
+  <section id="quietSection" class="section">
+    <div class="section-head">
+      <h2>All stocks <span id="quietCount" class="count">0</span></h2>
+      <div class="section-hint">Click any card to open charts</div>
+    </div>
+    <div id="quietGrid" class="card-grid"></div>
+  </section>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel">
+      <header class="modal-header">
+        <div class="modal-title">
+          <h2 id="modalTicker">–</h2>
+          <div id="modalMeta" class="modal-meta">–</div>
+        </div>
+        <div class="modal-header-right">
+          <div class="chip-group timeframe-group" id="timeframeChips">
+            <button class="chip" data-tf="1M">1M</button>
+            <button class="chip active" data-tf="3M">3M</button>
+            <button class="chip" data-tf="6M">6M</button>
+            <button class="chip" data-tf="1Y">1Y</button>
+            <button class="chip" data-tf="ALL">All</button>
+          </div>
+          <button class="btn ghost" data-close aria-label="Close">Close</button>
+        </div>
+      </header>
+      <div class="modal-body">
+        <div id="candlestickChart" class="chart-block"></div>
+        <div class="pnf-block">
+          <div class="chart-title">Point &amp; Figure  <span class="chart-subtitle">Close-Only · 1.0% box · 2-box reversal</span></div>
+          <div id="pnfChart" class="pnf-chart"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
