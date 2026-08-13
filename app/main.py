@@ -296,6 +296,82 @@ def api_scan_refresh(notify: bool = False):
     return {"status": "started"}
 
 
+@app.get("/api/telegram_test")
+def api_telegram_test(msg: Optional[str] = None):
+    """Diagnostic: sends a message using the server's env vars and returns the raw result."""
+    from scanner.notify import send_telegram
+    text = msg or f"[Render diagnostic] Ping at {dt.datetime.now(ET).isoformat(timespec='seconds')} ET"
+    token_len = len(config.TELEGRAM_BOT_TOKEN or "")
+    chat_id = config.TELEGRAM_CHAT_ID
+    try:
+        result = send_telegram(text)
+        return {"status": "sent", "token_len": token_len, "chat_id": chat_id, "result": result}
+    except Exception as e:
+        # Try to surface the underlying Telegram HTTP error text if there was one.
+        detail = ""
+        try:
+            import requests
+            r = requests.post(
+                f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
+                data={"chat_id": config.TELEGRAM_CHAT_ID, "text": "raw retry"},
+                timeout=10,
+            )
+            detail = f" | raw-retry status={r.status_code} body={r.text[:400]}"
+        except Exception as ee:
+            detail = f" | raw-retry crashed: {ee}"
+        return {
+            "status": "failed",
+            "error": f"{type(e).__name__}: {e}",
+            "token_len": token_len,
+            "chat_id": chat_id,
+            "detail": detail,
+        }
+
+
+@app.get("/api/debug")
+def api_debug():
+    """Small stats snapshot for debugging on the live server."""
+    with _cache_lock:
+        cached_err = _cache["error"]
+        cached_scan_at = _cache["last_scan_at"]
+        cached_signals = len(_cache["signals"])
+    try:
+        import sqlite3
+        c = sqlite3.connect(store.DB_PATH)
+        counts = {
+            "scan_history": c.execute("SELECT COUNT(*) FROM scan_history").fetchone()[0],
+            "entry_alerts": c.execute("SELECT COUNT(*) FROM entry_alerts").fetchone()[0],
+            "candidate_alerts": c.execute("SELECT COUNT(*) FROM candidate_alerts").fetchone()[0],
+            "bpnya_history": c.execute("SELECT COUNT(*) FROM bpnya_history").fetchone()[0],
+            "daily_snapshot": c.execute("SELECT COUNT(*) FROM daily_snapshot").fetchone()[0],
+        }
+        last_scans = [r[0] for r in c.execute(
+            "SELECT scan_at FROM scan_history ORDER BY id DESC LIMIT 8"
+        )]
+    except Exception as e:
+        counts = {"error": str(e)}
+        last_scans = []
+    scheduler_info = None
+    if _scheduler:
+        job = _scheduler.get_job("hourly_scan")
+        if job:
+            scheduler_info = {
+                "next_run_at": job.next_run_time.isoformat() if job.next_run_time else None,
+                "trigger": str(job.trigger),
+            }
+    return {
+        "now_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "now_et":  dt.datetime.now(ET).isoformat(timespec="seconds"),
+        "data_dir": str(store.DATA_DIR),
+        "counts": counts,
+        "last_scan_times": last_scans,
+        "cached_error": cached_err,
+        "cached_signals": cached_signals,
+        "cached_last_scan_at": cached_scan_at,
+        "scheduler": scheduler_info,
+    }
+
+
 @app.get("/api/schedule")
 def api_schedule():
     if not _scheduler:
