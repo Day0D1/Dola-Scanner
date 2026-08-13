@@ -46,10 +46,28 @@ def format_scan_summary(
 
     now = dt.datetime.now(ET).strftime("%I:%M %p ET  %a %b %d")
 
+    regime = breadth.regime or "?"
+    risk = breadth.risk or "?"
+    spx = f"SPX={breadth.spx.column or '?'}"
+    if breadth.spx.change is not None:
+        spx += f"({breadth.spx.change} boxes)"
+    vix = f"VIX={breadth.vix.column or '?'}"
+    if breadth.vix.level is not None:
+        vix += f" @ {breadth.vix.level:.2f}"
+        if breadth.vix.change is not None:
+            vix += f" ({'+' if breadth.vix.change > 0 else ''}{breadth.vix.change})"
+    bpnya = f"BPNYA={breadth.bpnya.column or '?'}"
+    if breadth.bpnya.level is not None:
+        bpnya += f" @ {breadth.bpnya.level:.1f}%"
+        if breadth.bpnya.change is not None:
+            bpnya += f" ({'+' if breadth.bpnya.change > 0 else ''}{breadth.bpnya.change})"
+
     lines = [
         f"<b>Options Scanner</b>  <i>{now}</i>",
-        f"Breadth: <b>{breadth.verdict}</b>   "
-        f"(SPX={breadth.spx_trend or '?'}  |  VIX={breadth.vix_trend or '?'})",
+        f"Regime: <b>{regime}</b>   Risk: <b>{risk}</b>",
+        f"  {spx}",
+        f"  {bpnya}",
+        f"  {vix}",
         f"Universe: {len(signals)} stocks",
         "",
     ]

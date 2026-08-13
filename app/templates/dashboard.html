@@ -15,6 +15,7 @@
       <span class="brand-sub">Options Scanner</span>
     </div>
     <div class="topbar-actions">
+      <a href="/history" class="btn ghost">History</a>
       <div class="scan-times">
         <span id="scanTime" class="scan-time">–</span>
         <span id="nextScan" class="scan-time next">next auto-scan: –</span>
@@ -24,25 +25,29 @@
   </header>
 
   <section class="breadth-panel">
-    <div class="breadth-verdict">
-      <div class="breadth-label">Market breadth</div>
-      <div id="breadthVerdict" class="breadth-value mixed">LOADING</div>
+    <div class="risk-card">
+      <div class="breadth-label">Risk environment</div>
+      <div id="riskValue" class="risk-value mixed">LOADING</div>
+      <div class="risk-regime">Regime: <span id="regimeValue">–</span></div>
     </div>
     <div class="breadth-pillars">
-      <div class="pillar">
-        <div class="pillar-name">$SPX</div>
-        <div class="pillar-hint">P&amp;F column</div>
-        <div id="spxCol" class="pillar-value">–</div>
+      <div class="pillar three-col clickable" data-index="SPX" title="Open SPX charts">
+        <div class="pillar-name">$SPX <span class="open-hint">open</span></div>
+        <div class="pillar-row"><span class="k">Signal</span><span id="spxSignal" class="v">–</span></div>
+        <div class="pillar-row"><span class="k">Level</span><span id="spxLevel" class="v">–</span></div>
+        <div class="pillar-row"><span class="k">Boxes</span><span id="spxChange" class="v">–</span></div>
       </div>
-      <div class="pillar">
-        <div class="pillar-name">$VIX</div>
-        <div class="pillar-hint">P&amp;F column</div>
-        <div id="vixCol" class="pillar-value">–</div>
+      <div class="pillar three-col clickable" data-index="BPNYA" title="Open BPNYA charts">
+        <div class="pillar-name">$BPNYA <span class="pillar-tag">self-computed</span><span class="open-hint">open</span></div>
+        <div class="pillar-row"><span class="k">Signal</span><span id="bpnyaSignal" class="v">–</span></div>
+        <div class="pillar-row"><span class="k">Level</span><span id="bpnyaLevel" class="v">–</span></div>
+        <div class="pillar-row"><span class="k">Change</span><span id="bpnyaChange" class="v">–</span></div>
       </div>
-      <div class="pillar" id="bpnyaPillar">
-        <div class="pillar-name">$BPNYA <span class="pillar-tag">(self-computed)</span></div>
-        <div class="pillar-hint"><span id="bpnyaPct">–</span>% on P&amp;F buy signal</div>
-        <div id="bpnyaCol" class="pillar-value">–</div>
+      <div class="pillar three-col clickable" data-index="VIX" title="Open VIX charts">
+        <div class="pillar-name">$VIX <span class="open-hint">open</span></div>
+        <div class="pillar-row"><span class="k">Signal</span><span id="vixSignal" class="v">–</span></div>
+        <div class="pillar-row"><span class="k">Level</span><span id="vixLevel" class="v">–</span></div>
+        <div class="pillar-row"><span class="k">Change</span><span id="vixChange" class="v">–</span></div>
       </div>
     </div>
   </section>
@@ -126,13 +131,36 @@
             <button class="chip" data-tf="1Y">1Y</button>
             <button class="chip" data-tf="ALL">All</button>
           </div>
+          <button id="settingsToggle" class="btn ghost" aria-label="Chart settings">Settings</button>
           <button class="btn ghost" data-close aria-label="Close">Close</button>
         </div>
       </header>
+      <div id="settingsPanel" class="settings-panel hidden">
+        <div class="settings-grid">
+          <div class="settings-group">
+            <div class="settings-group-title">Bollinger Bands</div>
+            <label>Period <input id="setBBPeriod" type="number" min="1" max="200" step="1"></label>
+            <label>Std Dev <input id="setBBStdDev" type="number" min="0.1" max="5" step="0.1"></label>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group-title">RSI</div>
+            <label>Period <input id="setRSIPeriod" type="number" min="1" max="200" step="1"></label>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group-title">Point &amp; Figure</div>
+            <label>Box <input id="setPnFBox" type="number" min="0.01" max="100" step="0.1"><span id="setPnFBoxUnit" class="unit">%</span></label>
+            <label>Reversal <input id="setPnFReversal" type="number" min="1" max="10" step="1"></label>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button id="settingsApply" class="btn primary">Apply</button>
+          <button id="settingsReset" class="btn ghost">Reset to defaults</button>
+        </div>
+      </div>
       <div class="modal-body">
         <div id="candlestickChart" class="chart-block"></div>
         <div class="pnf-block">
-          <div class="chart-title">Point &amp; Figure  <span class="chart-subtitle">Close-Only · 1.0% box · 2-box reversal</span></div>
+          <div class="chart-title">Point &amp; Figure  <span class="chart-subtitle" id="pnfSubtitle">Close-Only · 1.0% box · 2-box reversal</span></div>
           <div id="pnfChart" class="pnf-chart"></div>
         </div>
       </div>

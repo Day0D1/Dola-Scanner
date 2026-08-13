@@ -2,19 +2,27 @@
 
 const $ = (id) => document.getElementById(id);
 
+const DEFAULT_CHART_SETTINGS = {
+  stock:  { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
+  SPX:    { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
+  VIX:    { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
+  BPNYA:  { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 2.0, pnf_reversal: 3, pnf_type: "traditional" },
+};
+
 const state = {
   signals: [],
   breadth: null,
   filter: {
     query: "",
-    signal: "ALL",     // ALL | ENTRIES | CANDIDATES | ELON | MUSK
-    rsi: "ALL",        // ALL | OVERSOLD | OVERBOUGHT | NEUTRAL
-    pnf: "ALL",        // ALL | X | O
+    signal: "ALL",
+    rsi: "ALL",
+    pnf: "ALL",
     sector: "ALL",
   },
   sort: "signal",
-  modalTicker: null,
+  modal: { kind: null, key: null },   // kind: 'stock' | 'index', key: ticker or SPX/VIX/BPNYA
   timeframe: "3M",
+  chartSettings: { ...DEFAULT_CHART_SETTINGS.stock },
 };
 
 // ---- API --------------------------------------------------------------
@@ -33,9 +41,26 @@ async function triggerRefresh(notify = false) {
   return r.json();
 }
 
-async function fetchStock(ticker, timeframe = "3M") {
-  const r = await fetch(`/api/stock/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`);
-  if (!r.ok) throw new Error(`stock fetch failed: ${r.status}`);
+function _settingsToQuery(s) {
+  const parts = [];
+  if (s.bb_period != null)    parts.push(`bb_period=${s.bb_period}`);
+  if (s.bb_stddev != null)    parts.push(`bb_stddev=${s.bb_stddev}`);
+  if (s.rsi_period != null)   parts.push(`rsi_period=${s.rsi_period}`);
+  if (s.pnf_box != null)      parts.push(`pnf_box=${s.pnf_box}`);
+  if (s.pnf_reversal != null) parts.push(`pnf_reversal=${s.pnf_reversal}`);
+  return parts.join("&");
+}
+
+async function fetchChart(kind, key, timeframe, settings) {
+  const path = kind === "index"
+    ? `/api/index/${encodeURIComponent(key)}`
+    : `/api/stock/${encodeURIComponent(key)}`;
+  const q = `?timeframe=${encodeURIComponent(timeframe)}&${_settingsToQuery(settings || {})}`;
+  const r = await fetch(path + q);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.error || `fetch failed: ${r.status}`);
+  }
   return r.json();
 }
 
@@ -59,21 +84,44 @@ function fmtDateMDY(isoDate) {
 // ---- Breadth ----------------------------------------------------------
 
 function renderBreadth(b) {
-  const v = $("breadthVerdict");
-  v.textContent = b.verdict;
-  v.className = "breadth-value " + b.verdict.toLowerCase();
+  const risk = $("riskValue");
+  const riskLbl = b.risk || "–";
+  risk.textContent = riskLbl;
+  risk.className = "risk-value " + (b.risk ? b.risk.toLowerCase() : "mixed");
 
-  const setPillar = (id, val) => {
-    const el = $(id);
-    if (val === "X") { el.textContent = "X"; el.className = "pillar-value x"; }
-    else if (val === "O") { el.textContent = "O"; el.className = "pillar-value o"; }
-    else { el.textContent = "–"; el.className = "pillar-value"; }
-  };
-  setPillar("spxCol", b.spx);
-  setPillar("vixCol", b.vix);
-  setPillar("bpnyaCol", b.bpnya);
-  const pct = $("bpnyaPct");
-  if (pct) pct.textContent = (b.bpnya_pct != null) ? b.bpnya_pct.toFixed(1) : "–";
+  const regimeEl = $("regimeValue");
+  if (b.regime === "BUY") {
+    regimeEl.innerHTML = '<span class="buy">BUY</span> (SPX in uptrend)';
+  } else if (b.regime === "SELL") {
+    regimeEl.innerHTML = '<span class="sell">SELL</span> (SPX in downtrend)';
+  } else {
+    regimeEl.textContent = "–";
+  }
+
+  const signalClass = (v) => v === "X" ? "v x" : (v === "O" ? "v o" : "v");
+  const changeClass = (v) => v == null ? "v" : (v > 0 ? "v pos" : (v < 0 ? "v neg" : "v"));
+  const fmtChange = (v) => v == null ? "–" : (v > 0 ? `+${v}` : `${v}`);
+  const fmt = (v, digits) => v == null ? "–" : Number(v).toFixed(digits ?? 2);
+
+  const set = (id, text, cls) => { const e = $(id); e.textContent = text; if (cls) e.className = cls; };
+
+  // SPX
+  const spx = b.spx || {};
+  set("spxSignal", spx.signal || "–", signalClass(spx.column));
+  set("spxLevel",  fmt(spx.level, 2), "v");
+  set("spxChange", spx.change == null ? "–" : String(spx.change), "v");
+
+  // BPNYA
+  const bp = b.bpnya || {};
+  set("bpnyaSignal", bp.signal || "–", signalClass(bp.column));
+  set("bpnyaLevel",  bp.level == null ? "–" : fmt(bp.level, 2) + "%", "v");
+  set("bpnyaChange", fmtChange(bp.change), changeClass(bp.change));
+
+  // VIX
+  const vix = b.vix || {};
+  set("vixSignal", vix.signal || "–", signalClass(vix.column));
+  set("vixLevel",  fmt(vix.level, 2), "v");
+  set("vixChange", fmtChange(vix.change), changeClass(vix.change));
 }
 
 // ---- Filter / sort ----------------------------------------------------
@@ -239,29 +287,35 @@ async function refreshUI() {
 
 // ---- Modal + charts ---------------------------------------------------
 
-function openStockModal(ticker) {
-  state.modalTicker = ticker;
+function openStockModal(ticker)  { openChartModal("stock", ticker); }
+function openIndexModal(key)     { openChartModal("index", key); }
+
+function openChartModal(kind, key) {
+  state.modal = { kind, key };
   state.timeframe = "3M";
+  state.chartSettings = { ...(DEFAULT_CHART_SETTINGS[key] || DEFAULT_CHART_SETTINGS.stock) };
   updateTimeframeChips();
+  populateSettingsPanel();
+  $("settingsPanel").classList.add("hidden");
   $("modal").classList.remove("hidden");
-  $("modalTicker").textContent = ticker;
+  $("modalTicker").textContent = key;
   $("modalMeta").textContent = "loading…";
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
-  loadStockCharts();
+  loadCharts();
 }
 
 function closeModal() {
   $("modal").classList.add("hidden");
-  state.modalTicker = null;
+  state.modal = { kind: null, key: null };
 }
 
-function loadStockCharts() {
-  const ticker = state.modalTicker;
-  if (!ticker) return;
-  fetchStock(ticker, state.timeframe).then(renderStockModal).catch((e) => {
-    $("modalMeta").textContent = "error: " + e.message;
-  });
+function loadCharts() {
+  const { kind, key } = state.modal;
+  if (!kind || !key) return;
+  fetchChart(kind, key, state.timeframe, state.chartSettings)
+    .then(renderChartModal)
+    .catch((e) => { $("modalMeta").textContent = "error: " + e.message; });
 }
 
 function updateTimeframeChips() {
@@ -270,24 +324,35 @@ function updateTimeframeChips() {
   });
 }
 
-function renderStockModal(payload) {
+function renderChartModal(payload) {
   const s = payload.signal;
   const last = payload.candles[payload.candles.length - 1];
+  const isPct = state.modal.kind === "index" && state.modal.key === "BPNYA";
+  const suffix = isPct ? "%" : "";
   const meta = [];
-  meta.push(`$${last.close.toFixed(2)}`);
-  if (last.rsi != null) meta.push(`RSI(5) ${last.rsi.toFixed(1)}`);
+  meta.push(`${isPct ? "" : "$"}${last.close.toFixed(2)}${suffix}`);
+  if (last.rsi != null) meta.push(`RSI(${payload.settings.rsi_period}) ${last.rsi.toFixed(1)}`);
   const pnfCol = payload.pnf.length ? payload.pnf[payload.pnf.length - 1].type : "–";
   meta.push(`P&F ${pnfCol}`);
   meta.push(`TF ${payload.timeframe}`);
   if (s?.candidate) meta.push(`${s.candidate} candidate`);
   if (s?.entry_trigger) meta.push(`ENTER ${s.entry_trigger.replace("_", " ").toLowerCase()}`);
+  $("modalTicker").textContent = payload.display_name || payload.ticker;
   $("modalMeta").textContent = meta.join("  ·  ");
 
-  renderCandlestick(payload.candles);
-  renderPnF(payload.pnf, payload.pnf_box_pct || 1.0);
+  const boxUnit = payload.pnf_type === "traditional" ? "pt" : "%";
+  $("pnfSubtitle").textContent =
+    `Close-Only · ${payload.pnf_box} ${boxUnit} box · ${payload.pnf_reversal}-box reversal · ${payload.pnf_type}`;
+
+  if (payload.chart_type === "line") {
+    renderLineChart(payload.candles, payload.settings);
+  } else {
+    renderCandlestick(payload.candles, payload.settings);
+  }
+  renderPnF(payload.pnf, payload.pnf_box, payload.pnf_type);
 }
 
-function renderCandlestick(candles) {
+function renderCandlestick(candles, settings) {
   const x = candles.map((c) => c.date);
   const open = candles.map((c) => c.open);
   const high = candles.map((c) => c.high);
@@ -349,7 +414,7 @@ function renderCandlestick(candles) {
       domain: [0.0, 0.28], gridcolor: "#232833", zerolinecolor: "#232833", range: [0, 100],
       side: "right",
       tickvals: [30, 50, 70],
-      title: { text: "RSI(5)", font: { color: "#8b93a4" } },
+      title: { text: `RSI(${settings?.rsi_period ?? 5})`, font: { color: "#8b93a4" } },
     },
     shapes: [
       { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2", y0: 30, y1: 30, line: { color: "#22c55e", width: 1, dash: "dash" } },
@@ -364,9 +429,48 @@ function renderCandlestick(candles) {
   });
 }
 
-function renderPnF(columns, boxPct) {
+function renderLineChart(candles, settings) {
+  const x = candles.map((c) => c.date);
+  const y = candles.map((c) => c.close);
+  const traces = [
+    {
+      type: "scatter",
+      mode: "lines+markers",
+      x, y,
+      name: "",
+      line: { color: "#4c8dff", width: 2 },
+      marker: { color: "#4c8dff", size: 5 },
+      hovertemplate: "%{x|%m/%d/%Y}<br>%{y:.2f}%<extra></extra>",
+    },
+  ];
+  const layout = {
+    dragmode: "pan",
+    margin: { l: 20, r: 60, t: 12, b: 34 },
+    paper_bgcolor: "#12151d",
+    plot_bgcolor: "#12151d",
+    font: { color: "#e6e8ec", family: "ui-monospace, Menlo, Consolas, monospace", size: 11 },
+    showlegend: false,
+    xaxis: {
+      gridcolor: "#232833", zerolinecolor: "#232833", type: "date",
+      tickformat: "%m/%d/%Y", hoverformat: "%m/%d/%Y",
+      showspikes: true, spikemode: "across", spikecolor: "#4c8dff", spikethickness: 1,
+    },
+    yaxis: {
+      gridcolor: "#232833", zerolinecolor: "#232833", side: "right",
+      range: [0, 100], tickvals: [0, 30, 50, 70, 100],
+      title: { text: "% on buy signal", font: { color: "#8b93a4" } },
+    },
+    shapes: [
+      { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: 30, y1: 30, line: { color: "#22c55e", width: 1, dash: "dash" } },
+      { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: 70, y1: 70, line: { color: "#ef4444", width: 1, dash: "dash" } },
+    ],
+  };
+  Plotly.newPlot("candlestickChart", traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
+}
+
+function renderPnF(columns, box, pnfType) {
   if (!columns.length) {
-    $("pnfChart").innerHTML = '<div style="color:#8b93a4;padding:16px">No P&amp;F data.</div>';
+    $("pnfChart").innerHTML = '<div style="color:#8b93a4;padding:16px">No P&amp;F data yet.</div>';
     return;
   }
 
@@ -381,12 +485,14 @@ function renderPnF(columns, boxPct) {
   const labelW = 62;
   const rightLabelW = 62;
   const padTop = 12;
-  const padBottom = 34;   // room for date row
+  const padBottom = 34;
   const rows = maxIdx - minIdx + 1;
   const height = rows * boxH + padTop + padBottom;
   const width = labelW + columns.length * boxW + rightLabelW + 10;
 
-  const priceOfIdx = (i) => Math.exp(i * Math.log(1 + boxPct / 100));
+  const priceOfIdx = (i) => pnfType === "traditional"
+    ? i * box
+    : Math.exp(i * Math.log(1 + box / 100));
 
   const parts = [];
   parts.push(`<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" style="display:block; min-width:${width}px; height:${height}px; background:#12151d">`);
@@ -520,7 +626,50 @@ $("timeframeChips").addEventListener("click", (e) => {
   updateTimeframeChips();
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
-  loadStockCharts();
+  loadCharts();
+});
+
+// Pillar cards open the index chart modal.
+document.querySelectorAll(".pillar.clickable").forEach(el => {
+  el.addEventListener("click", () => openIndexModal(el.dataset.index));
+});
+
+// Settings panel wiring.
+function populateSettingsPanel() {
+  const s = state.chartSettings;
+  $("setBBPeriod").value = s.bb_period;
+  $("setBBStdDev").value = s.bb_stddev;
+  $("setRSIPeriod").value = s.rsi_period;
+  $("setPnFBox").value = s.pnf_box;
+  $("setPnFReversal").value = s.pnf_reversal;
+  $("setPnFBoxUnit").textContent = s.pnf_type === "traditional" ? "pt" : "%";
+}
+
+$("settingsToggle").addEventListener("click", () => {
+  $("settingsPanel").classList.toggle("hidden");
+});
+
+$("settingsApply").addEventListener("click", () => {
+  state.chartSettings = {
+    ...state.chartSettings,
+    bb_period:   Number($("setBBPeriod").value) || state.chartSettings.bb_period,
+    bb_stddev:   Number($("setBBStdDev").value) || state.chartSettings.bb_stddev,
+    rsi_period:  Number($("setRSIPeriod").value) || state.chartSettings.rsi_period,
+    pnf_box:     Number($("setPnFBox").value) || state.chartSettings.pnf_box,
+    pnf_reversal:Number($("setPnFReversal").value) || state.chartSettings.pnf_reversal,
+  };
+  $("candlestickChart").innerHTML = "";
+  $("pnfChart").innerHTML = "";
+  loadCharts();
+});
+
+$("settingsReset").addEventListener("click", () => {
+  const key = state.modal.key;
+  state.chartSettings = { ...(DEFAULT_CHART_SETTINGS[key] || DEFAULT_CHART_SETTINGS.stock) };
+  populateSettingsPanel();
+  $("candlestickChart").innerHTML = "";
+  $("pnfChart").innerHTML = "";
+  loadCharts();
 });
 
 $("refreshBtn").addEventListener("click", async () => {

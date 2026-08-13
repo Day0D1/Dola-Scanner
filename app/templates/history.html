@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dola — History</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Dola</span>
+      <span class="brand-sub">Daily history</span>
+    </div>
+    <div class="topbar-actions">
+      <a href="/" class="btn ghost">Dashboard</a>
+      <a href="/api/history.csv" class="btn">Export CSV</a>
+      <a href="/api/history.xlsx" class="btn primary">Export Excel</a>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>Market history</h2>
+      <div class="section-hint">One row per day. Most recent first.</div>
+    </div>
+    <div class="history-table-wrap">
+      <table id="historyTable" class="history-table">
+        <thead><tr id="historyHead"></tr></thead>
+        <tbody id="historyBody"><tr><td>Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function fmtDate(iso) {
+      if (!iso) return "";
+      const p = iso.split("-");
+      if (p.length !== 3) return iso;
+      return `${p[1]}/${p[2]}/${p[0]}`;
+    }
+    function fmtNum(v, digits) {
+      if (v == null || v === "") return "–";
+      const n = Number(v);
+      if (Number.isNaN(n)) return String(v);
+      return n.toFixed(digits ?? 2);
+    }
+    function fmtChange(v) {
+      if (v == null || v === "") return "–";
+      const n = Number(v);
+      if (Number.isNaN(n)) return String(v);
+      return n > 0 ? `+${n}` : `${n}`;
+    }
+
+    async function load() {
+      const r = await fetch("/api/history?limit=1000");
+      const payload = await r.json();
+      const head = $("historyHead");
+      head.innerHTML = payload.columns.map(([_, lbl]) => `<th>${lbl}</th>`).join("");
+      const body = $("historyBody");
+      if (!payload.rows.length) {
+        body.innerHTML = '<tr><td colspan="12" class="empty">No history yet. Data accumulates one row per day as scans run.</td></tr>';
+        return;
+      }
+      const cellFor = (key, val) => {
+        if (key === "date") return fmtDate(val);
+        if (key === "spx_change" || key === "spx_level") return val == null ? "–" : String(val);
+        if (key === "bpnya_level" || key === "vix_level") return fmtNum(val, 2);
+        if (key === "bpnya_change" || key === "vix_change") return fmtChange(val);
+        if (key === "risk") {
+          const cls = val ? `risk-cell ${String(val).toLowerCase()}` : "";
+          return `<span class="${cls}">${val || "–"}</span>`;
+        }
+        if (key === "regime") {
+          const cls = val === "BUY" ? "regime-cell buy" : val === "SELL" ? "regime-cell sell" : "regime-cell";
+          return `<span class="${cls}">${val || "–"}</span>`;
+        }
+        if (key === "spx_signal") {
+          const cls = val === "BUY" ? "regime-cell buy" : val === "SELL" ? "regime-cell sell" : "";
+          return `<span class="${cls}">${val || "–"}</span>`;
+        }
+        if (key === "spx_column" || key === "bpnya_column" || key === "vix_column") {
+          const cls = val === "X" ? "col-x" : val === "O" ? "col-o" : "";
+          return `<span class="${cls}">${val || "–"}</span>`;
+        }
+        return val ?? "–";
+      };
+      body.innerHTML = payload.rows.map(row =>
+        "<tr>" + payload.columns.map(([k]) => `<td>${cellFor(k, row[k])}</td>`).join("") + "</tr>"
+      ).join("");
+    }
+    load();
+  </script>
+</body>
+</html>

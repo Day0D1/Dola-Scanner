@@ -62,6 +62,23 @@ def init_db() -> None:
             universe_size INTEGER NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS daily_snapshot (
+            date TEXT PRIMARY KEY,
+            spx_signal TEXT,
+            spx_column TEXT,
+            spx_level REAL,
+            spx_change REAL,
+            bpnya_column TEXT,
+            bpnya_level REAL,
+            bpnya_change REAL,
+            vix_column TEXT,
+            vix_level REAL,
+            vix_change REAL,
+            regime TEXT,
+            risk TEXT,
+            updated_at TEXT NOT NULL
+        );
         """)
 
 
@@ -172,3 +189,56 @@ def get_bpnya_latest() -> Optional[dict]:
         if not row:
             return None
         return {"date": row[0], "pct": row[1], "universe_size": row[2]}
+
+
+# --- Daily snapshot -------------------------------------------------------
+
+_SNAPSHOT_COLS = [
+    "date",
+    "spx_signal", "spx_column", "spx_level", "spx_change",
+    "bpnya_column", "bpnya_level", "bpnya_change",
+    "vix_column", "vix_level", "vix_change",
+    "regime", "risk",
+]
+
+
+def upsert_daily_snapshot(payload: dict) -> None:
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    values = tuple(payload.get(c) for c in _SNAPSHOT_COLS) + (now_iso,)
+    with _connect() as c:
+        c.execute(
+            f"""
+            INSERT INTO daily_snapshot ({', '.join(_SNAPSHOT_COLS)}, updated_at)
+            VALUES ({', '.join(['?'] * (len(_SNAPSHOT_COLS) + 1))})
+            ON CONFLICT(date) DO UPDATE SET
+                spx_signal    = excluded.spx_signal,
+                spx_column    = excluded.spx_column,
+                spx_level     = excluded.spx_level,
+                spx_change    = excluded.spx_change,
+                bpnya_column  = excluded.bpnya_column,
+                bpnya_level   = excluded.bpnya_level,
+                bpnya_change  = excluded.bpnya_change,
+                vix_column    = excluded.vix_column,
+                vix_level     = excluded.vix_level,
+                vix_change    = excluded.vix_change,
+                regime        = excluded.regime,
+                risk          = excluded.risk,
+                updated_at    = excluded.updated_at
+            """,
+            values,
+        )
+
+
+def get_daily_history(limit: int = 200) -> list:
+    with _connect() as c:
+        rows = c.execute(
+            f"""
+            SELECT {', '.join(_SNAPSHOT_COLS)}, updated_at
+            FROM daily_snapshot
+            ORDER BY date DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    keys = _SNAPSHOT_COLS + ["updated_at"]
+    return [dict(zip(keys, r)) for r in rows]
