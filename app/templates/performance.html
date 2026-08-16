@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dola - Alert Performance</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Dola</span>
+      <span class="brand-sub">Alert performance</span>
+    </div>
+    <div class="topbar-actions">
+      <a href="/" class="btn ghost">Dashboard</a>
+      <a href="/history" class="btn ghost">History</a>
+      <a href="/api/performance.csv" class="btn">Export CSV</a>
+      <a href="/api/performance.xlsx" class="btn primary">Export Excel</a>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>ENTER NOW alerts &mdash; price checkpoints</h2>
+      <div class="section-hint">
+        Each row is one ENTER NOW alert. Cells at +1M through +6M show the closing price on that
+        anniversary (or the closest prior trading day). Green cells = favorable for the direction
+        (price up for SELL_PUTS, price down for SELL_CALLS). Red = unfavorable. "-" means the
+        checkpoint hasn't been reached yet.
+      </div>
+    </div>
+    <div class="perf-table-wrap">
+      <table id="perfTable" class="perf-table">
+        <thead><tr id="perfHead"></tr></thead>
+        <tbody id="perfBody"><tr><td>Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function fmtDateISO(iso) {
+      if (!iso) return "-";
+      const p = iso.split("-");
+      if (p.length !== 3) return iso;
+      return `${p[1]}/${p[2]}/${p[0]}`;
+    }
+    function fmtPrice(v) { return v == null ? "-" : `$${Number(v).toFixed(2)}`; }
+    function fmtPct(v) {
+      if (v == null) return "";
+      return (v > 0 ? "+" : "") + Number(v).toFixed(1) + "%";
+    }
+
+    function cellClass(cp) {
+      if (!cp.due) return "cp-future";
+      if (cp.price == null) return "cp-nodata";
+      if (cp.favorable === true)  return "cp-fav";
+      if (cp.favorable === false) return "cp-unfav";
+      return "";
+    }
+
+    async function load() {
+      try {
+        const r = await fetch("/api/performance");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const payload = await r.json();
+        render(payload);
+      } catch (e) {
+        $("perfBody").innerHTML = `<tr><td>Error loading performance: ${e.message}</td></tr>`;
+      }
+    }
+
+    function render(payload) {
+      const months = payload.months;
+      const rows = payload.rows;
+
+      const headerCells = ["Trigger Date", "Ticker", "Direction", "Trigger $"]
+        .concat(months.map(m => `+${m}M`));
+      $("perfHead").innerHTML = headerCells.map(h => `<th>${h}</th>`).join("");
+
+      if (!rows.length) {
+        $("perfBody").innerHTML =
+          '<tr><td colspan="' + headerCells.length + '" class="empty">No ENTER NOW alerts recorded yet. Alerts will appear here as they fire.</td></tr>';
+        return;
+      }
+
+      const html = rows.map(r => {
+        const dirCls = r.direction === "SELL_PUTS" ? "dir-puts" : "dir-calls";
+        const dirLabel = r.direction === "SELL_PUTS" ? "sell puts" : "sell calls";
+        const cells = [
+          `<td>${fmtDateISO(r.trigger_date)}</td>`,
+          `<td class="ticker">${r.ticker}</td>`,
+          `<td class="${dirCls}">${dirLabel}</td>`,
+          `<td>${fmtPrice(r.trigger_price)}</td>`,
+        ];
+        for (const cp of r.checkpoints) {
+          const cls = cellClass(cp);
+          if (!cp.due) {
+            cells.push(`<td class="${cls}"><span class="cp-date">${fmtDateISO(cp.target_date)}</span></td>`);
+          } else if (cp.price == null) {
+            cells.push(`<td class="${cls}">-</td>`);
+          } else {
+            cells.push(`<td class="${cls}"><div>${fmtPrice(cp.price)}</div><div class="cp-pct">${fmtPct(cp.change_pct)}</div></td>`);
+          }
+        }
+        return `<tr>${cells.join("")}</tr>`;
+      }).join("");
+      $("perfBody").innerHTML = html;
+    }
+
+    load();
+  </script>
+</body>
+</html>

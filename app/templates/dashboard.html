@@ -15,6 +15,8 @@
       <span class="brand-sub">Options Scanner</span>
     </div>
     <div class="topbar-actions">
+      <span id="modeBadge" class="mode-badge hidden"></span>
+      <a href="/performance" class="btn ghost">Performance</a>
       <a href="/history" class="btn ghost">History</a>
       <div class="scan-times">
         <span id="scanTime" class="scan-time">–</span>
@@ -128,10 +130,18 @@
             <button class="chip" data-tf="1M">1M</button>
             <button class="chip active" data-tf="3M">3M</button>
             <button class="chip" data-tf="6M">6M</button>
+            <button class="chip" data-tf="9M">9M</button>
             <button class="chip" data-tf="1Y">1Y</button>
+            <button class="chip" data-tf="1.5Y">1.5Y</button>
+            <button class="chip" data-tf="2Y">2Y</button>
             <button class="chip" data-tf="ALL">All</button>
           </div>
+          <div class="ticker-search">
+            <input id="modalSearchInput" class="search" type="search" placeholder="Search another ticker..." autocomplete="off" />
+            <ul id="modalSearchResults" class="ticker-search-results hidden"></ul>
+          </div>
           <button id="settingsToggle" class="btn ghost" aria-label="Chart settings">Settings</button>
+          <a id="fvLink" class="btn ghost" href="#" target="_blank" rel="noopener">Fair Value</a>
           <button class="btn ghost" data-close aria-label="Close">Close</button>
         </div>
       </header>
@@ -167,6 +177,7 @@
     </div>
   </div>
 
+  <script src="/static/autocomplete.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

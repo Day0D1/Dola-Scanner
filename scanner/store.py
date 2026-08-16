@@ -42,7 +42,8 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
             direction TEXT NOT NULL,
-            fired_at TEXT NOT NULL
+            fired_at TEXT NOT NULL,
+            trigger_price REAL
         );
         CREATE INDEX IF NOT EXISTS idx_entry_alerts_ticker_at
             ON entry_alerts(ticker, direction, fired_at);
@@ -80,6 +81,10 @@ def init_db() -> None:
             updated_at TEXT NOT NULL
         );
         """)
+        # Migrations for existing DBs.
+        cols = [r[1] for r in c.execute("PRAGMA table_info(entry_alerts)")]
+        if "trigger_price" not in cols:
+            c.execute("ALTER TABLE entry_alerts ADD COLUMN trigger_price REAL")
 
 
 def record_scan(scan_at: dt.datetime, breadth: BreadthReading, signals: Iterable[StockSignal]) -> int:
@@ -128,13 +133,29 @@ def was_entry_alerted_recently(ticker: str, direction: str, within_hours: int = 
         return row is not None
 
 
-def mark_entry_alerted(ticker: str, direction: str, when: Optional[dt.datetime] = None) -> None:
+def mark_entry_alerted(
+    ticker: str, direction: str,
+    when: Optional[dt.datetime] = None,
+    trigger_price: Optional[float] = None,
+) -> None:
     when = when or dt.datetime.now(dt.timezone.utc)
     with _connect() as c:
         c.execute(
-            "INSERT INTO entry_alerts (ticker, direction, fired_at) VALUES (?, ?, ?)",
-            (ticker, direction, when.isoformat()),
+            "INSERT INTO entry_alerts (ticker, direction, fired_at, trigger_price) VALUES (?, ?, ?, ?)",
+            (ticker, direction, when.isoformat(), trigger_price),
         )
+
+
+def get_entry_alerts_all() -> list:
+    """All entry alerts, newest first."""
+    with _connect() as c:
+        rows = c.execute(
+            "SELECT id, ticker, direction, fired_at, trigger_price FROM entry_alerts ORDER BY fired_at DESC"
+        ).fetchall()
+    return [
+        {"id": r[0], "ticker": r[1], "direction": r[2], "fired_at": r[3], "trigger_price": r[4]}
+        for r in rows
+    ]
 
 
 def was_candidate_alerted_recently(ticker: str, candidate_type: str, within_hours: int = 24, now: Optional[dt.datetime] = None) -> bool:

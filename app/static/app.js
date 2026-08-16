@@ -3,15 +3,16 @@
 const $ = (id) => document.getElementById(id);
 
 const DEFAULT_CHART_SETTINGS = {
-  stock:  { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
-  SPX:    { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
-  VIX:    { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
-  BPNYA:  { bb_period: 10, bb_stddev: 2, rsi_period: 5, pnf_box: 2.0, pnf_reversal: 3, pnf_type: "traditional" },
+  stock:  { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
+  SPX:    { bb_period: 10, bb_stddev: 2, rsi_period: 5,  pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
+  VIX:    { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
+  BPNYA:  { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 2.0, pnf_reversal: 3, pnf_type: "traditional" },
 };
 
 const state = {
   signals: [],
   breadth: null,
+  settings: { rsi_oversold: 39, rsi_overbought: 70 },
   filter: {
     query: "",
     signal: "ALL",
@@ -82,6 +83,27 @@ function fmtDateMDY(isoDate) {
 }
 
 // ---- Breadth ----------------------------------------------------------
+
+function renderModeBadge() {
+  const el = $("modeBadge");
+  if (!el) return;
+  const mode = state.settings?.signal_mode || "both";
+  if (mode === "both") {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  el.classList.remove("puts-only", "calls-only");
+  if (mode === "puts_only") {
+    el.classList.add("puts-only");
+    el.textContent = "Puts only";
+    el.title = "Only ELON candidates and SELL_PUTS entries are surfaced. MUSK/SELL_CALLS muted.";
+  } else if (mode === "calls_only") {
+    el.classList.add("calls-only");
+    el.textContent = "Calls only";
+    el.title = "Only MUSK candidates and SELL_CALLS entries are surfaced. ELON/SELL_PUTS muted.";
+  }
+}
 
 function renderBreadth(b) {
   const risk = $("riskValue");
@@ -197,7 +219,9 @@ function makeStockCard(s) {
     badgeHtml = `<span class="badge ${s.candidate.toLowerCase()}">${s.candidate}</span>`;
   }
 
-  const rsiCls = s.rsi != null && s.rsi < 30 ? "rsi-lo" : (s.rsi != null && s.rsi > 70 ? "rsi-hi" : "");
+  const lo = state.settings.rsi_oversold ?? 30;
+  const hi = state.settings.rsi_overbought ?? 70;
+  const rsiCls = s.rsi != null && s.rsi < lo ? "rsi-lo" : (s.rsi != null && s.rsi > hi ? "rsi-hi" : "");
   const pnfCls = s.pnf_column === "X" ? "pnf-x" : (s.pnf_column === "O" ? "pnf-o" : "");
   const price = s.last_close != null ? `$${s.last_close.toFixed(2)}` : "–";
   const rsiVal = s.rsi != null ? s.rsi.toFixed(1) : "–";
@@ -271,6 +295,8 @@ async function refreshUI() {
   renderBreadth(scan.breadth);
   state.signals = scan.signals;
   state.breadth = scan.breadth;
+  if (scan.settings) state.settings = scan.settings;
+  renderModeBadge();
   populateSectorSelect();
   renderCards();
 
@@ -302,6 +328,16 @@ function openChartModal(kind, key) {
   $("modalMeta").textContent = "loading…";
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
+  // Show/hide Fair Value link (stocks only, not indices).
+  const fvLink = $("fvLink");
+  if (fvLink) {
+    if (kind === "stock") {
+      fvLink.href = `/fair_value/${encodeURIComponent(key)}`;
+      fvLink.style.display = "";
+    } else {
+      fvLink.style.display = "none";
+    }
+  }
   loadCharts();
 }
 
@@ -413,12 +449,16 @@ function renderCandlestick(candles, settings) {
     yaxis2: {
       domain: [0.0, 0.28], gridcolor: "#232833", zerolinecolor: "#232833", range: [0, 100],
       side: "right",
-      tickvals: [30, 50, 70],
+      tickvals: [settings?.rsi_oversold ?? 30, 50, settings?.rsi_overbought ?? 70],
       title: { text: `RSI(${settings?.rsi_period ?? 5})`, font: { color: "#8b93a4" } },
     },
     shapes: [
-      { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2", y0: 30, y1: 30, line: { color: "#22c55e", width: 1, dash: "dash" } },
-      { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2", y0: 70, y1: 70, line: { color: "#ef4444", width: 1, dash: "dash" } },
+      { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2",
+        y0: settings?.rsi_oversold ?? 30, y1: settings?.rsi_oversold ?? 30,
+        line: { color: "#22c55e", width: 1, dash: "dash" } },
+      { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2",
+        y0: settings?.rsi_overbought ?? 70, y1: settings?.rsi_overbought ?? 70,
+        line: { color: "#ef4444", width: 1, dash: "dash" } },
     ],
   };
 
@@ -628,6 +668,16 @@ $("timeframeChips").addEventListener("click", (e) => {
   $("pnfChart").innerHTML = "";
   loadCharts();
 });
+
+// Ticker search inside the modal: swap the modal content to another stock without closing.
+if (window.attachTickerSearch) {
+  window.attachTickerSearch(
+    $("modalSearchInput"),
+    $("modalSearchResults"),
+    () => state.signals.map(s => ({ ticker: s.ticker, sector: s.sector })),
+    (ticker) => { openStockModal(ticker); }
+  );
+}
 
 // Pillar cards open the index chart modal.
 document.querySelectorAll(".pillar.clickable").forEach(el => {

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dola - Fair Value {{ ticker }}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Dola</span>
+      <span class="brand-sub">Fair Value: <span id="fvTicker">{{ ticker }}</span></span>
+    </div>
+    <div class="topbar-actions">
+      <div class="ticker-search">
+        <input id="fvSearchInput" class="search" type="search" placeholder="Search another ticker..." autocomplete="off" />
+        <ul id="fvSearchResults" class="ticker-search-results hidden"></ul>
+      </div>
+      <a href="/" class="btn ghost">Dashboard</a>
+      <button id="fvZoomOut" class="btn ghost fv-zoom" title="Zoom out (show more days)">-</button>
+      <select id="fvDays" class="select">
+        <option value="30">30 days</option>
+        <option value="60">60 days</option>
+        <option value="90" selected>90 days</option>
+        <option value="180">180 days</option>
+        <option value="270">270 days</option>
+        <option value="252">1 year</option>
+        <option value="378">1.5 years</option>
+        <option value="504">2 years</option>
+      </select>
+      <button id="fvZoomIn" class="btn ghost fv-zoom" title="Zoom in (show fewer days)">+</button>
+      <button id="fvRefresh" class="btn primary">Refresh</button>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="fv-legend">
+      <span class="fv-swatch bb-upper">H</span> BB upper
+      <span class="fv-swatch bb-middle">F</span> BB middle (fair value)
+      <span class="fv-swatch bb-lower">L</span> BB lower
+      <span class="fv-swatch close"></span> Close (standalone)
+      <span class="fv-swatch close-on-upper"></span> Close at upper
+      <span class="fv-swatch close-on-mid"></span> Close at fair value
+      <span class="fv-swatch close-on-lower"></span> Close at lower
+      <span class="fv-swatch range"></span> Intraday range
+    </div>
+    <div id="fvContainer" class="fv-container">
+      <div id="fvLoading" class="fv-loading">Loading...</div>
+    </div>
+  </section>
+
+  <script>
+    window.FV_TICKER = "{{ ticker }}";
+  </script>
+  <script src="/static/autocomplete.js"></script>
+  <script src="/static/fair_value.js"></script>
+</body>
+</html>
