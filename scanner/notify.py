@@ -9,7 +9,7 @@ import requests
 
 from scanner import config
 from scanner.breadth import BreadthReading
-from scanner.signals import StockSignal
+from scanner.signals import StockSignal  # noqa: F401
 
 
 TELEGRAM_API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
@@ -72,12 +72,15 @@ def format_scan_summary(
         "",
     ]
 
+    watch = set(getattr(config, "MAJOR_WATCHLIST", []) or [])
+    star = lambda t: "★ " if t in watch else ""
+
     if entries:
         lines.append(f"<b>&gt;&gt;&gt; ENTER NOW ({len(entries)}) &lt;&lt;&lt;</b>")
         for s in entries:
             arrow = "sell puts" if s.entry_trigger == "SELL_PUTS" else "sell calls"
             tag = "  <b>[NEW]</b>" if s.ticker in fresh_entries else "  <i>(already alerted)</i>"
-            lines.append(f"  <b>{s.ticker}</b>  ${s.last_close:.2f}  --&gt;  <b>{arrow}</b>{tag}")
+            lines.append(f"  {star(s.ticker)}<b>{s.ticker}</b>  ${s.last_close:.2f}  --&gt;  <b>{arrow}</b>{tag}")
             lines.append(
                 f"    RSI(5) {s.rsi:.1f}  |  P&amp;F {s.pnf_column}  |  "
                 f"BB[{s.bb_lower:.2f} / {s.bb_middle:.2f} / {s.bb_upper:.2f}]"
@@ -90,10 +93,11 @@ def format_scan_summary(
             need = "P&amp;F flip to X" if s.candidate == "ELON" else "P&amp;F flip to O"
             tag = "  <b>[NEW]</b>" if s.ticker in fresh_candidates else ""
             lines.append(
-                f"  <b>{s.candidate}</b>  {s.ticker}  ${s.last_close:.2f}  "
+                f"  <b>{s.candidate}</b>  {star(s.ticker)}{s.ticker}  ${s.last_close:.2f}  "
                 f"(RSI {s.rsi:.1f}, P&amp;F {s.pnf_column or '?'}, waiting on {need}){tag}"
             )
         lines.append("")
+    lines.append("<i>★ = Major Watchlist ticker</i>" if watch else "")
 
     if not entries and not candidates:
         lines.append(f"<i>All quiet. {len(quiet)} stocks scanned, no candidates or entries.</i>")

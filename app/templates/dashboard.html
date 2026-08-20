@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dola Options Scanner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -59,6 +62,7 @@
       <input id="searchInput" class="search" type="search" placeholder="Search ticker (e.g. AAPL)" autocomplete="off" />
       <div class="chip-group" id="signalChips">
         <button class="chip active" data-signal="ALL">All</button>
+        <button class="chip" data-signal="MAJOR">&#9733; Major</button>
         <button class="chip" data-signal="ENTRIES">Entries</button>
         <button class="chip" data-signal="CANDIDATES">Candidates</button>
         <button class="chip elon" data-signal="ELON">ELON</button>
@@ -109,6 +113,14 @@
     <div id="candidatesGrid" class="card-grid"></div>
   </section>
 
+  <section id="majorSection" class="section">
+    <div class="section-head">
+      <h2>&#9733; Major Watchlist <span id="majorCount" class="count">0</span></h2>
+      <div class="section-hint">Your priority stocks — sorted by signal strength</div>
+    </div>
+    <div id="majorGrid" class="card-grid"></div>
+  </section>
+
   <section id="quietSection" class="section">
     <div class="section-head">
       <h2>All stocks <span id="quietCount" class="count">0</span></h2>
@@ -141,7 +153,7 @@
             <ul id="modalSearchResults" class="ticker-search-results hidden"></ul>
           </div>
           <button id="settingsToggle" class="btn ghost" aria-label="Chart settings">Settings</button>
-          <a id="fvLink" class="btn ghost" href="#" target="_blank" rel="noopener">Fair Value</a>
+          <a id="fvLink" class="btn ghost" href="#" target="_blank" rel="noopener">Time Series</a>
           <button class="btn ghost" data-close aria-label="Close">Close</button>
         </div>
       </header>
@@ -170,8 +182,12 @@
       <div class="modal-body">
         <div id="candlestickChart" class="chart-block"></div>
         <div class="pnf-block">
-          <div class="chart-title">Point &amp; Figure  <span class="chart-subtitle" id="pnfSubtitle">Close-Only · 1.0% box · 2-box reversal</span></div>
+          <div class="chart-title">Point &amp; Figure &mdash; Close  <span class="chart-subtitle" id="pnfSubtitle">Close-Only · 1.0% box · 2-box reversal</span></div>
           <div id="pnfChart" class="pnf-chart"></div>
+        </div>
+        <div class="pnf-block">
+          <div class="chart-title">Point &amp; Figure &mdash; Fair Value  <span class="chart-subtitle" id="pnfSubtitleFV">built on BB middle · same P&amp;F settings</span></div>
+          <div id="pnfChartFV" class="pnf-chart"></div>
         </div>
       </div>
     </div>

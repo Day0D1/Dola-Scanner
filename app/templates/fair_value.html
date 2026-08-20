@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dola - Fair Value {{ ticker }}</title>
+  <title>Dola - Time Series {{ ticker }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -11,7 +14,7 @@
     <div class="brand">
       <span class="brand-dot"></span>
       <span class="brand-name">Dola</span>
-      <span class="brand-sub">Fair Value: <span id="fvTicker">{{ ticker }}</span></span>
+      <span class="brand-sub">Time Series: <span id="fvTicker">{{ ticker }}</span></span>
     </div>
     <div class="topbar-actions">
       <div class="ticker-search">
@@ -31,7 +34,8 @@
         <option value="504">2 years</option>
       </select>
       <button id="fvZoomIn" class="btn ghost fv-zoom" title="Zoom in (show fewer days)">+</button>
-      <button id="fvRefresh" class="btn primary">Refresh</button>
+      <a id="fvExport" class="btn primary" href="#">Export Excel</a>
+      <button id="fvRefresh" class="btn">Refresh</button>
     </div>
   </header>
 

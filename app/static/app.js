@@ -3,10 +3,10 @@
 const $ = (id) => document.getElementById(id);
 
 const DEFAULT_CHART_SETTINGS = {
-  stock:  { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
-  SPX:    { bb_period: 10, bb_stddev: 2, rsi_period: 5,  pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
-  VIX:    { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "percentage" },
-  BPNYA:  { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 2.0, pnf_reversal: 3, pnf_type: "traditional" },
+  stock:  { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 3, pnf_type: "percentage" },
+  SPX:    { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 3, pnf_type: "percentage" },
+  VIX:    { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "traditional" },
+  BPNYA:  { bb_period: 20, bb_stddev: 2, rsi_period: 10, pnf_box: 1.0, pnf_reversal: 2, pnf_type: "traditional" },
 };
 
 const state = {
@@ -108,8 +108,14 @@ function renderModeBadge() {
 function renderBreadth(b) {
   const risk = $("riskValue");
   const riskLbl = b.risk || "–";
+  const changed = risk.textContent !== riskLbl;
   risk.textContent = riskLbl;
   risk.className = "risk-value " + (b.risk ? b.risk.toLowerCase() : "mixed");
+  if (changed) {
+    risk.classList.remove("number-anim");
+    void risk.offsetWidth;  // reflow so animation retriggers
+    risk.classList.add("number-anim");
+  }
 
   const regimeEl = $("regimeValue");
   if (b.regime === "BUY") {
@@ -155,6 +161,7 @@ function passesFilter(s) {
     if (!s.ticker.toUpperCase().includes(q)) return false;
   }
   switch (f.signal) {
+    case "MAJOR":       if (!s.on_watchlist) return false; break;
     case "ENTRIES":     if (!s.entry_trigger) return false; break;
     case "CANDIDATES":  if (!s.candidate) return false; break;
     case "ELON":        if (s.candidate !== "ELON") return false; break;
@@ -227,11 +234,12 @@ function makeStockCard(s) {
   const rsiVal = s.rsi != null ? s.rsi.toFixed(1) : "–";
   const pnfVal = s.pnf_column || "–";
 
+  const starHtml = s.on_watchlist ? '<span class="major-star" title="Major Watchlist">&#9733;</span>' : "";
   card.innerHTML = `
-    <div class="row"><span class="ticker">${s.ticker}</span><span class="price">${price}</span></div>
+    <div class="row"><span class="ticker">${starHtml}${s.ticker}</span><span class="price">${price}</span></div>
     <div class="sector">${s.sector || ""}</div>
     <div class="meta">
-      <span>RSI(5) <span class="${rsiCls}">${rsiVal}</span></span>
+      <span>RSI <span class="${rsiCls}">${rsiVal}</span></span>
       <span>P&amp;F <span class="${pnfCls}">${pnfVal}</span></span>
     </div>
     ${badgeHtml ? `<div style="margin-top:8px">${badgeHtml}</div>` : ""}
@@ -240,10 +248,23 @@ function makeStockCard(s) {
   return card;
 }
 
+function showSkeletonGrid() {
+  // Populate the "All stocks" grid with 12 skeleton cards while the first scan runs.
+  const grid = $("quietGrid");
+  if (!grid || grid.dataset.skeletonShown === "1") return;
+  grid.dataset.skeletonShown = "1";
+  const cards = [];
+  for (let i = 0; i < 12; i++) {
+    cards.push('<div class="stock-card"><div class="row"><span class="skeleton" style="width:52px;height:16px;display:inline-block">&nbsp;</span><span class="skeleton" style="width:64px;height:15px;display:inline-block">&nbsp;</span></div><div class="sector"><span class="skeleton" style="width:100px;height:10px;display:inline-block">&nbsp;</span></div><div class="meta"><span class="skeleton" style="width:70px;height:12px;display:inline-block">&nbsp;</span><span class="skeleton" style="width:70px;height:12px;display:inline-block">&nbsp;</span></div></div>');
+  }
+  grid.innerHTML = cards.join("");
+}
+
 function paintSection(sectionId, countId, gridId, list) {
   const secEl = $(sectionId);
   $(countId).textContent = list.length;
   const gridEl = $(gridId);
+  gridEl.dataset.skeletonShown = "";  // clear skeleton flag
   gridEl.innerHTML = "";
   for (const s of list) gridEl.appendChild(makeStockCard(s));
   if (sectionId !== "quietSection") {
@@ -257,11 +278,25 @@ function renderCards() {
 
   const entries = sorted.filter(s => s.entry_trigger);
   const candidates = sorted.filter(s => s.candidate && !s.entry_trigger);
+  // Major Watchlist: all major-watch stocks (sorted by signal strength via existing sort default).
+  const majorAll = state.signals.filter(s => s.on_watchlist);
+  const major = sortSignalStrength(majorAll);
 
   paintSection("entriesSection", "entriesCount", "entriesGrid", entries);
   paintSection("candidatesSection", "candidatesCount", "candidatesGrid", candidates);
+  paintSection("majorSection", "majorCount", "majorGrid", major);
   paintSection("quietSection", "quietCount", "quietGrid", sorted);
   $("resultsCount").textContent = sorted.length;
+}
+
+function sortSignalStrength(list) {
+  const arr = [...list];
+  arr.sort((a, b) => {
+    const d = signalStrength(b) - signalStrength(a);
+    if (d !== 0) return d;
+    return a.ticker.localeCompare(b.ticker);
+  });
+  return arr;
 }
 
 function populateSectorSelect() {
@@ -283,14 +318,17 @@ function populateSectorSelect() {
 async function refreshUI() {
   const scan = await fetchScan();
   if (scan.status === "error") {
-    $("breadthVerdict").textContent = "ERROR";
-    $("breadthVerdict").className = "breadth-value bearish";
+    const risk = $("riskValue");
+    if (risk) { risk.textContent = "ERROR"; risk.className = "risk-value high"; }
     return;
   }
   if (scan.status === "loading") {
     $("scanTime").textContent = scan.scanning ? "scanning…" : "loading…";
+    if (scan.scanning) showSkeletonGrid();
+    if (scan.scanning) $("refreshBtn")?.classList.add("pulsing");
     return;
   }
+  $("refreshBtn")?.classList.remove("pulsing");
   $("scanTime").textContent = (scan.scanning ? "scanning…  " : "last scan  ") + fmtTime(scan.last_scan_at);
   renderBreadth(scan.breadth);
   state.signals = scan.signals;
@@ -328,6 +366,7 @@ function openChartModal(kind, key) {
   $("modalMeta").textContent = "loading…";
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
+  if ($("pnfChartFV")) $("pnfChartFV").innerHTML = "";
   // Show/hide Fair Value link (stocks only, not indices).
   const fvLink = $("fvLink");
   if (fvLink) {
@@ -377,15 +416,21 @@ function renderChartModal(payload) {
   $("modalMeta").textContent = meta.join("  ·  ");
 
   const boxUnit = payload.pnf_type === "traditional" ? "pt" : "%";
-  $("pnfSubtitle").textContent =
+  const pnfSubtitleText =
     `Close-Only · ${payload.pnf_box} ${boxUnit} box · ${payload.pnf_reversal}-box reversal · ${payload.pnf_type}`;
+  $("pnfSubtitle").textContent = pnfSubtitleText;
+  if ($("pnfSubtitleFV")) {
+    $("pnfSubtitleFV").textContent =
+      `${payload.pnf_box} ${boxUnit} box · ${payload.pnf_reversal}-box reversal · built on BB(${payload.settings.bb_period}) middle`;
+  }
 
   if (payload.chart_type === "line") {
     renderLineChart(payload.candles, payload.settings);
   } else {
     renderCandlestick(payload.candles, payload.settings);
   }
-  renderPnF(payload.pnf, payload.pnf_box, payload.pnf_type);
+  renderPnF(payload.pnf, payload.pnf_box, payload.pnf_type, "pnfChart");
+  renderPnF(payload.pnf_fair_value || [], payload.pnf_box, payload.pnf_type, "pnfChartFV");
 }
 
 function renderCandlestick(candles, settings) {
@@ -508,9 +553,11 @@ function renderLineChart(candles, settings) {
   Plotly.newPlot("candlestickChart", traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
 }
 
-function renderPnF(columns, box, pnfType) {
+function renderPnF(columns, box, pnfType, targetId) {
+  const container = document.getElementById(targetId || "pnfChart");
+  if (!container) return;
   if (!columns.length) {
-    $("pnfChart").innerHTML = '<div style="color:#8b93a4;padding:16px">No P&amp;F data yet.</div>';
+    container.innerHTML = '<div style="color:#8b93a4;padding:16px">No P&amp;F data yet.</div>';
     return;
   }
 
@@ -607,7 +654,7 @@ function renderPnF(columns, box, pnfType) {
   }
 
   parts.push("</svg>");
-  $("pnfChart").innerHTML = parts.join("");
+  container.innerHTML = parts.join("");
 }
 
 // ---- Event wiring -----------------------------------------------------
@@ -666,6 +713,7 @@ $("timeframeChips").addEventListener("click", (e) => {
   updateTimeframeChips();
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
+  if ($("pnfChartFV")) $("pnfChartFV").innerHTML = "";
   loadCharts();
 });
 
@@ -710,6 +758,7 @@ $("settingsApply").addEventListener("click", () => {
   };
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
+  if ($("pnfChartFV")) $("pnfChartFV").innerHTML = "";
   loadCharts();
 });
 
@@ -719,12 +768,15 @@ $("settingsReset").addEventListener("click", () => {
   populateSettingsPanel();
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
+  if ($("pnfChartFV")) $("pnfChartFV").innerHTML = "";
   loadCharts();
 });
 
 $("refreshBtn").addEventListener("click", async () => {
-  $("refreshBtn").disabled = true;
-  $("refreshBtn").textContent = "Scanning…";
+  const btn = $("refreshBtn");
+  btn.disabled = true;
+  btn.textContent = "Scanning…";
+  btn.classList.add("pulsing");
   try {
     await triggerRefresh(false);
     for (let i = 0; i < 90; i++) {
@@ -733,8 +785,9 @@ $("refreshBtn").addEventListener("click", async () => {
       if (!s.scanning) { await refreshUI(); break; }
     }
   } finally {
-    $("refreshBtn").disabled = false;
-    $("refreshBtn").textContent = "Refresh scan";
+    btn.disabled = false;
+    btn.textContent = "Refresh scan";
+    btn.classList.remove("pulsing");
   }
 });
 

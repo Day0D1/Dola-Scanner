@@ -11,13 +11,23 @@ function fmtDate(iso) {
   return `${p[2]}-${MONTHS[parseInt(p[1], 10) - 1]}`;
 }
 
-function pickStep(range) {
-  if (range <= 20) return 0.5;
-  if (range <= 40) return 1;
-  if (range <= 100) return 2;
-  if (range <= 200) return 5;
-  if (range <= 500) return 10;
-  return 20;
+// 1% log-scale grid: each level is exactly 1% above the previous, matching
+// the percentage-based P&F box grid the app uses everywhere else.
+const LOG_STEP = 1.01;
+const LN_STEP = Math.log(LOG_STEP);
+
+function priceToBoxIdx(price) {
+  return Math.floor(Math.log(price) / LN_STEP);
+}
+function boxIdxToPrice(idx) {
+  return Math.exp(idx * LN_STEP);
+}
+function priceDigitsFor(price) {
+  if (price >= 500) return 2;
+  if (price >= 100) return 2;
+  if (price >= 10)  return 2;
+  if (price >= 1)   return 3;
+  return 4;
 }
 
 function cellWidth(n) {
@@ -36,11 +46,13 @@ function cellFontSize(n) {
   return "9px";
 }
 
-function nearestLevel(price, levelsSet, step) {
+function nearestLogLevel(price) {
   if (price == null) return null;
-  const rounded = Math.round(price / step) * step;
-  const rerounded = Math.round(rounded * 100) / 100;
-  return levelsSet.has(rerounded) ? rerounded : null;
+  return boxIdxToPrice(priceToBoxIdx(price));
+}
+function eqLevel(a, b) {
+  if (a == null || b == null) return false;
+  return Math.abs(a - b) / Math.max(a, b) < 1e-6;
 }
 
 async function load() {
@@ -76,14 +88,13 @@ function render(data) {
       if (p != null) { lo = Math.min(lo, p); hi = Math.max(hi, p); }
     }
   }
-  const step = pickStep(hi - lo);
-  const gridMin = Math.floor(lo / step) * step - step;
-  const gridMax = Math.ceil(hi / step) * step + step;
+  // Build 1% log-scale price grid from just-below lo to just-above hi.
+  const minIdx = priceToBoxIdx(lo) - 1;
+  const maxIdx = priceToBoxIdx(hi) + 1;
   const levels = [];
-  for (let p = gridMax; p >= gridMin; p -= step) levels.push(Math.round(p * 100) / 100);
-  const levelSet = new Set(levels);
+  for (let i = maxIdx; i >= minIdx; i--) levels.push(boxIdxToPrice(i));
 
-  const priceDigits = step >= 1 ? 0 : 2;
+  const priceDigits = priceDigitsFor(lo);
   const rsiLo = data.settings?.rsi_oversold ?? 30;
   const rsiHi = data.settings?.rsi_overbought ?? 70;
 
@@ -97,6 +108,9 @@ function render(data) {
                           cls: (d.rsi != null && d.rsi < rsiLo) ? "rsi-lo" : ((d.rsi != null && d.rsi > rsiHi) ? "rsi-hi" : "") })],
     ["BOL-H",   (d) => ({ text: d.bb_upper != null ? d.bb_upper.toFixed(priceDigits) : "-", cls: "bol-h" })],
     ["BOL-L",   (d) => ({ text: d.bb_lower != null ? d.bb_lower.toFixed(priceDigits) : "-", cls: "bol-l" })],
+    ["BPNYA",   (d) => ({ text: d.bpnya_column || "-", cls: d.bpnya_column === "X" ? "col-x" : (d.bpnya_column === "O" ? "col-o" : "") })],
+    ["VIX",     (d) => ({ text: d.vix_column || "-",   cls: d.vix_column === "X" ? "col-x"   : (d.vix_column === "O" ? "col-o" : "") })],
+    ["RISK",    (d) => ({ text: d.risk || "-",         cls: d.risk === "LOW" ? "risk-cell low" : (d.risk === "MEDIUM" ? "risk-cell medium" : (d.risk === "HIGH" ? "risk-cell high" : "")) })],
   ];
 
   let html = '<div class="fv-scroll"><table class="fv-table"><thead>';
@@ -113,15 +127,15 @@ function render(data) {
   for (const price of levels) {
     html += `<tr><th class="fv-pricelabel">${price.toFixed(priceDigits)}</th>`;
     for (const d of days) {
-      const bbUpperLvl  = nearestLevel(d.bb_upper, levelSet, step);
-      const bbLowerLvl  = nearestLevel(d.bb_lower, levelSet, step);
-      const bbMiddleLvl = nearestLevel(d.bb_middle, levelSet, step);
-      const closeLvl    = nearestLevel(d.close, levelSet, step);
+      const bbUpperLvl  = nearestLogLevel(d.bb_upper);
+      const bbLowerLvl  = nearestLogLevel(d.bb_lower);
+      const bbMiddleLvl = nearestLogLevel(d.bb_middle);
+      const closeLvl    = nearestLogLevel(d.close);
 
-      const isBBUpper  = price === bbUpperLvl;
-      const isBBLower  = price === bbLowerLvl;
-      const isBBMiddle = price === bbMiddleLvl;
-      const isClose    = price === closeLvl;
+      const isBBUpper  = eqLevel(price, bbUpperLvl);
+      const isBBLower  = eqLevel(price, bbLowerLvl);
+      const isBBMiddle = eqLevel(price, bbMiddleLvl);
+      const isClose    = eqLevel(price, closeLvl);
       const inRange    = price >= d.low && price <= d.high;
 
       let cls = "", text = "";
@@ -160,20 +174,27 @@ function stepZoom(delta) {
   const cur = TIMEFRAMES.indexOf(currentDays);
   let idx = cur;
   if (cur < 0) {
-    // pick nearest in TIMEFRAMES
     idx = TIMEFRAMES.reduce((bestIdx, val, i) =>
       Math.abs(val - currentDays) < Math.abs(TIMEFRAMES[bestIdx] - currentDays) ? i : bestIdx, 0);
   }
   const next = Math.min(TIMEFRAMES.length - 1, Math.max(0, idx + delta));
   currentDays = TIMEFRAMES[next];
+  updateExportHref();
   load();
+}
+
+function updateExportHref() {
+  const btn = document.getElementById("fvExport");
+  if (btn) btn.href = `/api/fair_value/${encodeURIComponent(T)}/export.xlsx?days=${currentDays}`;
 }
 
 document.getElementById("fvDays").addEventListener("change", (e) => {
   currentDays = parseInt(e.target.value, 10);
+  updateExportHref();
   load();
 });
 document.getElementById("fvRefresh").addEventListener("click", load);
+updateExportHref();
 document.getElementById("fvZoomIn").addEventListener("click", () => stepZoom(-1));
 document.getElementById("fvZoomOut").addEventListener("click", () => stepZoom(+1));
 document.addEventListener("keydown", (e) => {

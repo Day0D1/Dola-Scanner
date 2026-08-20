@@ -18,14 +18,13 @@ RSI_PERIOD = 10
 RSI_OVERSOLD = 39.0
 RSI_OVERBOUGHT = 70.0
 
-# SPX keeps the older/faster settings per user's spec — everything else uses the
-# defaults above.
-SPX_BB_PERIOD = 10
-SPX_BB_STDDEV = 2.0
-SPX_RSI_PERIOD = 5
-
 PNF_BOX_PCT = 1.0
-PNF_REVERSAL = 2
+PNF_REVERSAL = 3
+
+# VIX uses TRADITIONAL scaling (fixed-point box) since its natural range is
+# small and bounded — 1-point boxes are more intuitive than percentage.
+VIX_PNF_BOX_SIZE = 1.0
+VIX_PNF_REVERSAL = 2
 
 # What signal side(s) to surface to the user (dashboard + Telegram):
 #   "puts_only"  = only ELON candidates and SELL_PUTS entries
@@ -50,9 +49,10 @@ MVP_UNIVERSE = [
     "UNH",
 ]
 
-# Curated watchlist supplied by the user. Merged into the scan universe on top of
-# the auto-built top-30-per-GICS-sector list.
-WATCHLIST = [
+# Major Watchlist supplied by the user. These are priority stocks — merged into
+# the scan universe on top of the top-30-per-GICS-sector list, tagged in the API
+# response, promoted into their own dashboard section, and highlighted in Telegram.
+MAJOR_WATCHLIST = [
     "AAPL", "AFL", "AIG", "AMAT", "AMD", "AMZN", "ANET", "APP", "ARM", "ASML",
     "AXP", "BA", "BBY", "BIDU", "BSX", "C", "CAH", "CARR", "CAT", "CDNS",
     "CF", "CHTR", "CI", "CMG", "CNC", "COHR", "COIN", "CRH", "CSCO", "CVS",

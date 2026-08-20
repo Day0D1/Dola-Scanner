@@ -1,12 +1,51 @@
 """Technical indicators: Bollinger Bands (10,2), RSI (5, Wilder), Point & Figure."""
 from __future__ import annotations
 
+import datetime as dt
 import math
 from dataclasses import dataclass
 from typing import List, Literal, Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _is_intraday_today(bar_date, now_et: Optional[dt.datetime] = None) -> bool:
+    """
+    True if `bar_date` is today ET AND today is a weekday AND current ET time is
+    before 16:15 (market close + 15 min for the last-print settlement window).
+    Meaning: this bar's "close" is really the current intraday price, not a
+    confirmed EOD close. Drop it from any indicator that must match StockCharts
+    end-of-day behavior (P&F).
+    """
+    now = now_et or dt.datetime.now(_ET)
+    today = now.date()
+    if isinstance(bar_date, pd.Timestamp):
+        bar_date = bar_date.date()
+    if bar_date != today:
+        return False
+    if now.weekday() >= 5:   # Sat/Sun
+        return False
+    if now.hour < 16 or (now.hour == 16 and now.minute < 15):
+        return True
+    return False
+
+
+def confirmed_closes(series: pd.Series, now_et: Optional[dt.datetime] = None) -> pd.Series:
+    """
+    Return `series` with its last row dropped if that row is today's still-forming
+    intraday bar. Safe on empty input.
+    """
+    if series is None or series.empty:
+        return series
+    last_idx = series.index[-1]
+    if _is_intraday_today(last_idx, now_et=now_et):
+        return series.iloc[:-1]
+    return series
 
 
 def bollinger_bands(closes: pd.Series, period: int = 10, num_std: float = 2.0) -> pd.DataFrame:

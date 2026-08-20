@@ -40,8 +40,11 @@ def evaluate_stock(ticker: str, ohlc: pd.DataFrame) -> Optional[StockSignal]:
 
     bb = indicators.bollinger_bands(closes, config.BB_PERIOD, config.BB_STDDEV)
     rsi_series = indicators.rsi(closes, config.RSI_PERIOD)
+    # P&F must use CONFIRMED closes only — today's intraday bar would falsely
+    # flip the column when price briefly crosses a reversal threshold. StockCharts
+    # only updates its P&F once today's real close is in.
     pnf_col: PnFState = indicators.current_pnf_column(
-        closes, config.PNF_BOX_PCT, config.PNF_REVERSAL
+        indicators.confirmed_closes(closes), config.PNF_BOX_PCT, config.PNF_REVERSAL
     )
 
     last_close = float(closes.iloc[-1])

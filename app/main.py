@@ -91,9 +91,13 @@ def _scan_universe_tickers() -> list[str]:
             tickers = list(config.MVP_UNIVERSE)
     else:
         tickers = list(config.MVP_UNIVERSE)
-    if getattr(config, "WATCHLIST", None):
-        tickers = sorted(set(tickers) | set(config.WATCHLIST))
+    if getattr(config, "MAJOR_WATCHLIST", None):
+        tickers = sorted(set(tickers) | set(config.MAJOR_WATCHLIST))
     return tickers
+
+
+def _major_watchlist_set() -> set:
+    return set(getattr(config, "MAJOR_WATCHLIST", []) or [])
 
 
 def _run_scan_sync(notify: bool = True) -> None:
@@ -222,7 +226,9 @@ async def lifespan(_app: FastAPI):
     # First scan on startup so the dashboard is populated immediately.
     _start_scan_bg(notify=False)
 
-    # Hourly scan Mon-Fri, 10:00 AM through 4:00 PM ET (tz pinned on the trigger too).
+    # Hourly scan Mon-Fri 10:00 AM - 4:00 PM ET (intraday), plus an EOD scan at
+    # 4:45 PM ET so any P&F flip from today's actual close fires an alert the
+    # same evening instead of waiting for tomorrow's 10 AM scan.
     _scheduler = BackgroundScheduler(timezone=ET)
     _scheduler.add_job(
         _scheduled_scan,
@@ -231,10 +237,18 @@ async def lifespan(_app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    _scheduler.add_job(
+        _scheduled_scan,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=45, timezone=ET),
+        id="eod_scan",
+        max_instances=1,
+        coalesce=True,
+    )
     _scheduler.start()
-    job = _scheduler.get_job("hourly_scan")
-    if job:
-        print(f"[scheduler] started, next run: {job.next_run_time}")
+    for jid in ("hourly_scan", "eod_scan"):
+        j = _scheduler.get_job(jid)
+        if j:
+            print(f"[scheduler] {jid} next run: {j.next_run_time}")
     try:
         yield
     finally:
@@ -272,6 +286,7 @@ def _get_ticker_to_sector() -> dict:
 
 
 def _signal_to_dict(s: StockSignal) -> dict:
+    watch = _major_watchlist_set()
     return {
         "ticker": s.ticker,
         "sector": _get_ticker_to_sector().get(s.ticker, "Unknown"),
@@ -284,6 +299,7 @@ def _signal_to_dict(s: StockSignal) -> dict:
         "candidate": s.candidate,
         "entry_trigger": s.entry_trigger,
         "band_pierce_today": s.band_pierce_today,
+        "on_watchlist": s.ticker in watch,
     }
 
 
@@ -450,13 +466,23 @@ def api_tickers():
 def api_schedule():
     if not _scheduler:
         return {"status": "not_started"}
-    job = _scheduler.get_job("hourly_scan")
-    if not job:
+    jobs = _scheduler.get_jobs()
+    if not jobs:
         return {"status": "no_job"}
+    upcoming = [(j, j.next_run_time) for j in jobs if j.next_run_time]
+    if not upcoming:
+        return {"status": "no_upcoming"}
+    upcoming.sort(key=lambda x: x[1])
+    next_job, next_time = upcoming[0]
     return {
         "status": "ok",
-        "next_run_at": job.next_run_time.isoformat() if job.next_run_time else None,
-        "trigger": str(job.trigger),
+        "next_run_at": next_time.isoformat(),
+        "next_job": next_job.id,
+        "trigger": str(next_job.trigger),
+        "all_jobs": [
+            {"id": j.id, "next_run_at": (j.next_run_time.isoformat() if j.next_run_time else None)}
+            for j in jobs
+        ],
     }
 
 
@@ -486,7 +512,7 @@ _INDEX_KEYS = {
     },
     "VIX": {
         "source": "yfinance", "symbol": "^VIX",
-        "chart_type": "candlestick", "pnf_type": "percentage",
+        "chart_type": "candlestick", "pnf_type": "traditional",
         "display_name": "$VIX - Volatility Index",
     },
     "BPNYA": {
@@ -535,30 +561,54 @@ def _build_chart_payload(
             "rsi": None if pd.isna(rsi_series.loc[d]) else round(float(rsi_series.loc[d]), 1),
         })
 
+    # P&F uses CONFIRMED closes only (drops today's intraday bar during market
+    # hours). Matches StockCharts EOD P&F behavior; keeps ENTER NOW alerts from
+    # firing on unconfirmed intraday flips.
+    confirmed_close = indicators.confirmed_closes(ohlc["close"])
     if pnf_type == "traditional":
-        pnf_cols = indicators.point_figure_traditional(ohlc["close"], pnf_box, pnf_reversal)
+        pnf_cols = indicators.point_figure_traditional(confirmed_close, pnf_box, pnf_reversal)
         idx_to_price = lambda i: round(i * pnf_box, 2)
     else:
-        pnf_cols = indicators.point_figure(ohlc["close"], pnf_box, pnf_reversal)
+        pnf_cols = indicators.point_figure(confirmed_close, pnf_box, pnf_reversal)
         idx_to_price = lambda i: round(_idx_to_price(i, pnf_box), 2)
 
-    if candles:
-        window_start = candles[0]["date"]
-        pnf_windowed = [c for c in pnf_cols if (c.end_date or "") >= window_start]
-        if not pnf_windowed:
-            pnf_windowed = pnf_cols[-1:] if pnf_cols else []
+    # Second P&F built on the middle Bollinger Band series (= fair value).
+    # Also confirmed-close only so it matches the close P&F's timing behavior.
+    bb_middle_series = indicators.confirmed_closes(bb["middle"].dropna())
+    if len(bb_middle_series) >= 2:
+        if pnf_type == "traditional":
+            pnf_fv_cols = indicators.point_figure_traditional(
+                bb_middle_series, pnf_box, pnf_reversal
+            )
+        else:
+            pnf_fv_cols = indicators.point_figure(
+                bb_middle_series, pnf_box, pnf_reversal
+            )
     else:
-        pnf_windowed = pnf_cols
+        pnf_fv_cols = []
 
-    pnf = [{
-        "type": c.type,
-        "top_idx": c.top_idx,
-        "bottom_idx": c.bottom_idx,
-        "top_price": idx_to_price(c.top_idx),
-        "bottom_price": idx_to_price(c.bottom_idx),
-        "start_date": c.start_date,
-        "end_date": c.end_date,
-    } for c in pnf_windowed]
+    def _window_pnf(cols_list: list) -> list:
+        if not candles:
+            return cols_list
+        window_start = candles[0]["date"]
+        windowed = [c for c in cols_list if (c.end_date or "") >= window_start]
+        if not windowed and cols_list:
+            windowed = cols_list[-1:]
+        return windowed
+
+    def _serialize_pnf(cols_list: list) -> list:
+        return [{
+            "type": c.type,
+            "top_idx": c.top_idx,
+            "bottom_idx": c.bottom_idx,
+            "top_price": idx_to_price(c.top_idx),
+            "bottom_price": idx_to_price(c.bottom_idx),
+            "start_date": c.start_date,
+            "end_date": c.end_date,
+        } for c in cols_list]
+
+    pnf = _serialize_pnf(_window_pnf(pnf_cols))
+    pnf_fair_value = _serialize_pnf(_window_pnf(pnf_fv_cols))
 
     return {
         "timeframe": tf,
@@ -566,6 +616,7 @@ def _build_chart_payload(
         "chart_type": chart_type,
         "candles": candles,
         "pnf": pnf,
+        "pnf_fair_value": pnf_fair_value,
         "pnf_type": pnf_type,
         "pnf_box": pnf_box,
         "pnf_reversal": pnf_reversal,
@@ -830,7 +881,9 @@ def _spx_regime_for_dates(dates: list[str]) -> dict:
     spx = data.fetch_index(_INDEX_KEYS["SPX"]["symbol"], config.LOOKBACK_DAYS)
     if spx.empty:
         return {d: None for d in dates}
-    cols = indicators.point_figure(spx["close"], config.PNF_BOX_PCT, config.PNF_REVERSAL)
+    cols = indicators.point_figure(
+        spx["close"], config.PNF_BOX_PCT, config.PNF_REVERSAL
+    )
     out = {}
     for d in dates:
         found = None
@@ -840,6 +893,31 @@ def _spx_regime_for_dates(dates: list[str]) -> dict:
                 break
         out[d] = found
     return out
+
+
+def _vix_column_for_dates(dates: list[str]) -> dict:
+    """Return {date_str: 'X' | 'O' | None} for each date using VIX traditional P&F."""
+    vix = data.fetch_index(_INDEX_KEYS["VIX"]["symbol"], config.LOOKBACK_DAYS)
+    if vix.empty:
+        return {d: None for d in dates}
+    cols = indicators.point_figure_traditional(
+        vix["close"], config.VIX_PNF_BOX_SIZE, config.VIX_PNF_REVERSAL
+    )
+    out = {}
+    for d in dates:
+        found = None
+        for c in cols:
+            if c.start_date and c.end_date and c.start_date <= d <= c.end_date:
+                found = c.type
+                break
+        out[d] = found
+    return out
+
+
+def _daily_snapshot_by_date() -> dict:
+    """Return {date_str: {bpnya_column, risk, ...}} from the daily_snapshot table."""
+    rows = store.get_daily_history(limit=2000)
+    return {r["date"]: r for r in rows}
 
 
 @app.get("/fair_value/{ticker}", response_class=HTMLResponse)
@@ -871,6 +949,8 @@ def api_fair_value(
     tail = ohlc.tail(max(1, days))
     date_strs = [str(d) for d in tail.index]
     spx_regime = _spx_regime_for_dates(date_strs)
+    vix_col_map = _vix_column_for_dates(date_strs)
+    daily_snap = _daily_snapshot_by_date()
 
     def _col_type_for(d_str: str) -> Optional[str]:
         for c in pnf_cols:
@@ -897,6 +977,7 @@ def api_fair_value(
         if prev_close is not None and prev_close > 0 and close > 0:
             change = _price_to_box_idx(close, config.PNF_BOX_PCT) - _price_to_box_idx(prev_close, config.PNF_BOX_PCT)
 
+        snap = daily_snap.get(d_str, {})
         days_data.append({
             "date": d_str,
             "trend": spx_regime.get(d_str),
@@ -911,6 +992,9 @@ def api_fair_value(
             "close": round(close, 2),
             "pierced_upper": bb_u is not None and high > bb_u,
             "pierced_lower": bb_l is not None and low < bb_l,
+            "vix_column": snap.get("vix_column") or vix_col_map.get(d_str),
+            "bpnya_column": snap.get("bpnya_column"),
+            "risk": snap.get("risk"),
         })
         prev_close = close
 
@@ -925,6 +1009,50 @@ def api_fair_value(
             "rsi_overbought": config.RSI_OVERBOUGHT,
         },
     }
+
+
+_TS_COLUMNS = [
+    ("date", "Date"),
+    ("trend", "Trend"),
+    ("column", "Column"),
+    ("change", "Change (boxes)"),
+    ("rsi", "RSI"),
+    ("bb_upper", "BB Upper"),
+    ("bb_middle", "BB Middle"),
+    ("bb_lower", "BB Lower"),
+    ("high", "High"),
+    ("low", "Low"),
+    ("close", "Close"),
+    ("vix_column", "VIX"),
+    ("bpnya_column", "BPNYA"),
+    ("risk", "Risk"),
+]
+
+
+@app.get("/api/fair_value/{ticker}/export.xlsx")
+def api_fair_value_xlsx(ticker: str, days: int = 90):
+    payload = api_fair_value(ticker=ticker, days=days)
+    if isinstance(payload, JSONResponse):
+        return payload
+    rows = payload.get("days") or []
+    keys = [k for k, _ in _TS_COLUMNS]
+    labels = [lbl for _, lbl in _TS_COLUMNS]
+    df = pd.DataFrame([{k: r.get(k) for k in keys} for r in rows])
+    if not df.empty:
+        df = df[keys]
+        df.columns = labels
+    else:
+        df = pd.DataFrame(columns=labels)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=ticker.upper()[:31])
+    buf.seek(0)
+    fname = f"dola-timeseries-{ticker.upper()}-{dt.date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @app.get("/api/index/{key}")
@@ -958,19 +1086,21 @@ def api_index(
             status_code=404,
         )
 
-    default_box = 2.0 if meta["pnf_type"] == "traditional" else config.PNF_BOX_PCT
-    default_reversal = 3 if meta["pnf_type"] == "traditional" else config.PNF_REVERSAL
-
-    # SPX gets its own indicator defaults (faster: BB 10/2, RSI 5) so its chart
-    # keeps the historical settings the strategy relies on for regime detection.
-    if key == "SPX":
-        default_bb_period = config.SPX_BB_PERIOD
-        default_bb_stddev = config.SPX_BB_STDDEV
-        default_rsi_period = config.SPX_RSI_PERIOD
+    # Per-index P&F defaults. VIX and BPNYA both use traditional 1-pt / 2-rev;
+    # SPX percentage 1/2; other stocks use the global percentage defaults.
+    if meta["pnf_type"] == "traditional":
+        default_box = 1.0
+        default_reversal = 2
     else:
-        default_bb_period = config.BB_PERIOD
-        default_bb_stddev = config.BB_STDDEV
-        default_rsi_period = config.RSI_PERIOD
+        default_box = config.PNF_BOX_PCT
+        default_reversal = config.PNF_REVERSAL
+
+    default_bb_period = config.BB_PERIOD
+    default_bb_stddev = config.BB_STDDEV
+    default_rsi_period = config.RSI_PERIOD
+    if key == "VIX":
+        default_box = config.VIX_PNF_BOX_SIZE
+        default_reversal = config.VIX_PNF_REVERSAL
 
     payload = _build_chart_payload(
         ohlc=ohlc, timeframe=timeframe,

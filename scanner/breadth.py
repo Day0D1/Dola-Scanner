@@ -13,9 +13,10 @@ Regime = Literal["BUY", "SELL"]
 Risk = Literal["LOW", "MEDIUM", "HIGH"]
 Column = Optional[Literal["X", "O"]]
 
-# StockCharts convention for a traditional P&F on a bullish-percent index.
-BPNYA_BOX_SIZE = 2.0
-BPNYA_REVERSAL = 3
+# Traditional P&F on the BPNYA %. Matches the VIX config the user is running now
+# so both bounded pillars behave the same way (1-pt boxes, 2-box reversal).
+BPNYA_BOX_SIZE = 1.0
+BPNYA_REVERSAL = 2
 
 
 @dataclass
@@ -88,8 +89,22 @@ def compute_risk(regime: Optional[Regime], bpnya_col: Column, vix_col: Column) -
     return "MEDIUM"
 
 
-def _current_column_and_boxes(closes: pd.Series):
-    cols = indicators.point_figure(closes, config.PNF_BOX_PCT, config.PNF_REVERSAL)
+def _current_column_and_boxes(
+    closes: pd.Series,
+    box_size: float = None,
+    reversal: int = None,
+    pnf_type: str = "percentage",
+):
+    if box_size is None:
+        box_size = config.PNF_BOX_PCT
+    if reversal is None:
+        reversal = config.PNF_REVERSAL
+    # Drop today's intraday bar so the P&F column matches EOD-truth (StockCharts).
+    closes = indicators.confirmed_closes(closes)
+    if pnf_type == "traditional":
+        cols = indicators.point_figure_traditional(closes, box_size, reversal)
+    else:
+        cols = indicators.point_figure(closes, box_size, reversal)
     if not cols:
         return None, None
     last = cols[-1]
@@ -108,6 +123,9 @@ def _bpnya_column_and_history():
     if len(history) < 2:
         return None, latest, prior
     series = pd.Series([h[1] for h in history], index=[h[0] for h in history])
+    # BPNYA is also computed from live scans — drop today's intraday value
+    # so the P&F only flips off confirmed EOD data.
+    series = indicators.confirmed_closes(series)
     cols = indicators.point_figure_traditional(series, BPNYA_BOX_SIZE, BPNYA_REVERSAL)
     return (cols[-1].type if cols else None), latest, prior
 
@@ -116,11 +134,13 @@ def read_breadth() -> BreadthReading:
     spx_ohlc = data.fetch_index(config.SPX_YF_SYMBOL, config.LOOKBACK_DAYS)
     vix_ohlc = data.fetch_index(config.VIX_YF_SYMBOL, config.LOOKBACK_DAYS)
 
-    # SPX pillar
+    # SPX pillar — uses the shared global P&F config (same as other stocks).
     spx_col, spx_boxes = (None, None)
     spx_level: Optional[float] = None
     if not spx_ohlc.empty:
-        spx_col, spx_boxes = _current_column_and_boxes(spx_ohlc["close"])
+        spx_col, spx_boxes = _current_column_and_boxes(
+            spx_ohlc["close"], pnf_type="percentage",
+        )
         spx_level = float(spx_ohlc["close"].iloc[-1])
     spx = PillarReading(
         column=spx_col,
@@ -129,12 +149,15 @@ def read_breadth() -> BreadthReading:
         signal=("BUY" if spx_col == "X" else ("SELL" if spx_col == "O" else None)),
     )
 
-    # VIX pillar
+    # VIX pillar (TRADITIONAL 1.0-pt box, 2-reversal — matches StockCharts VIX P&F).
     vix_col, _ = (None, None)
     vix_level: Optional[float] = None
     vix_change: Optional[float] = None
     if not vix_ohlc.empty:
-        vix_col, _ = _current_column_and_boxes(vix_ohlc["close"])
+        vix_col, _ = _current_column_and_boxes(
+            vix_ohlc["close"], config.VIX_PNF_BOX_SIZE, config.VIX_PNF_REVERSAL,
+            pnf_type="traditional",
+        )
         vix_level = float(vix_ohlc["close"].iloc[-1])
         if len(vix_ohlc) >= 2:
             vix_change = round(vix_level - float(vix_ohlc["close"].iloc[-2]), 2)
