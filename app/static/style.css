@@ -471,6 +471,29 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .stock-card .ticker .major-star { vertical-align: 1px; }
 
+/* IBD 50 fire badge */
+.ibd-fire {
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 12px;
+  filter: drop-shadow(0 0 6px rgba(249, 115, 22, 0.55));
+}
+.stock-card .ticker .ibd-fire { vertical-align: 1px; }
+
+/* IBD 50 section meta strip: as-of date + refresh button */
+.ibd50-asof {
+  color: var(--ink-3);
+  font-size: 12px;
+  margin-left: 8px;
+  font-family: var(--f-mono);
+}
+.btn-inline {
+  padding: 2px 10px;
+  font-size: 12px;
+  margin-left: 8px;
+  vertical-align: 1px;
+}
+
 .select {
   background: var(--surface-1);
   color: var(--ink);
@@ -972,7 +995,19 @@ button { -webkit-tap-highlight-color: transparent; }
   --fv-font-size: 11px;
 }
 .fv-loading { padding: var(--sp-6); color: var(--ink-3); text-align: center; font-family: var(--f-mono); }
-.fv-scroll { overflow-x: auto; overflow-y: visible; }
+
+/* Chart is its own scroll region — Excel-style. Header rows freeze to its top,
+   price column freezes to its left. Page around the chart (topbar, legend,
+   controls) stays put. overscroll-behavior:contain prevents accidental page
+   scroll while zooming inside. */
+.fv-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 220px);
+  min-height: 400px;
+  overscroll-behavior: contain;
+  border-radius: calc(var(--r-md) - 4px);
+}
+
 .fv-table { border-collapse: separate; border-spacing: 0; font-family: var(--f-mono); font-size: var(--fv-font-size); }
 .fv-table th, .fv-table td {
   min-width: var(--fv-cell-w); height: 22px;
@@ -982,6 +1017,8 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow: hidden; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+/* Freeze the LEFT — price / row-label column stays fixed while horizontal scroll. */
 .fv-table th.fv-rowlabel, .fv-table th.fv-pricelabel {
   background: var(--surface-2);
   color: var(--ink-3);
@@ -990,7 +1027,32 @@ button { -webkit-tap-highlight-color: transparent; }
   font-weight: 600;
   position: sticky; left: 0; z-index: 3;
 }
-.fv-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); }
+
+/* Freeze the TOP — every cell in every thead row (DATE through RISK) stays
+   fixed while vertical scroll. Applies to both <th> row-labels and <td> per-day
+   cells; default surface-2 bg for cells that don't already have a colored bg.
+   Each row gets a progressive `top` offset (var(--row-h) × index) so the 10
+   header rows stack vertically instead of collapsing onto a single line. */
+.fv-table { --row-h: 22px; }
+.fv-table thead th,
+.fv-table thead td {
+  position: sticky;
+  z-index: 2;
+  background: var(--surface-2);
+}
+.fv-table thead tr:nth-child(1)  > * { top: calc(var(--row-h) * 0); }
+.fv-table thead tr:nth-child(2)  > * { top: calc(var(--row-h) * 1); }
+.fv-table thead tr:nth-child(3)  > * { top: calc(var(--row-h) * 2); }
+.fv-table thead tr:nth-child(4)  > * { top: calc(var(--row-h) * 3); }
+.fv-table thead tr:nth-child(5)  > * { top: calc(var(--row-h) * 4); }
+.fv-table thead tr:nth-child(6)  > * { top: calc(var(--row-h) * 5); }
+.fv-table thead tr:nth-child(7)  > * { top: calc(var(--row-h) * 6); }
+.fv-table thead tr:nth-child(8)  > * { top: calc(var(--row-h) * 7); }
+.fv-table thead tr:nth-child(9)  > * { top: calc(var(--row-h) * 8); }
+.fv-table thead tr:nth-child(10) > * { top: calc(var(--row-h) * 9); }
+
+/* Corner cells (thead row-labels) sit above BOTH the sticky row and column at
+   their intersection so nothing peeks through as you scroll diagonally. */
 .fv-table thead th.fv-rowlabel { z-index: 4; }
 .fv-table td.trend-b { color: var(--bull); font-weight: 700; }
 .fv-table td.trend-s { color: var(--bear); font-weight: 700; }

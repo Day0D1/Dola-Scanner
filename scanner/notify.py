@@ -36,9 +36,11 @@ def format_scan_summary(
     signals: List[StockSignal],
     fresh_entries: Optional[Set[str]] = None,
     fresh_candidates: Optional[Set[str]] = None,
+    ibd50_tickers: Optional[Set[str]] = None,
 ) -> str:
     fresh_entries = fresh_entries or set()
     fresh_candidates = fresh_candidates or set()
+    ibd50 = ibd50_tickers or set()
 
     entries = [s for s in signals if s.entry_trigger]
     candidates = [s for s in signals if s.candidate and not s.entry_trigger]
@@ -62,18 +64,29 @@ def format_scan_summary(
         if breadth.bpnya.change is not None:
             bpnya += f" ({'+' if breadth.bpnya.change > 0 else ''}{breadth.bpnya.change})"
 
+    universe_line = f"Universe: {len(signals)} stocks"
+    if ibd50:
+        universe_line += f"  ({len(ibd50)} IBD 50)"
+
     lines = [
         f"<b>Options Scanner</b>  <i>{now}</i>",
         f"Regime: <b>{regime}</b>   Risk: <b>{risk}</b>",
         f"  {spx}",
         f"  {bpnya}",
         f"  {vix}",
-        f"Universe: {len(signals)} stocks",
+        universe_line,
         "",
     ]
 
     watch = set(getattr(config, "MAJOR_WATCHLIST", []) or [])
-    star = lambda t: "★ " if t in watch else ""
+
+    def badge(t: str) -> str:
+        b = ""
+        if t in watch: b += "★"
+        if t in ibd50: b += "🔥"
+        return (b + " ") if b else ""
+
+    star = badge  # keep legacy name used below
 
     if entries:
         lines.append(f"<b>&gt;&gt;&gt; ENTER NOW ({len(entries)}) &lt;&lt;&lt;</b>")
@@ -82,7 +95,7 @@ def format_scan_summary(
             tag = "  <b>[NEW]</b>" if s.ticker in fresh_entries else "  <i>(already alerted)</i>"
             lines.append(f"  {star(s.ticker)}<b>{s.ticker}</b>  ${s.last_close:.2f}  --&gt;  <b>{arrow}</b>{tag}")
             lines.append(
-                f"    RSI(5) {s.rsi:.1f}  |  P&amp;F {s.pnf_column}  |  "
+                f"    RSI now <b>{s.rsi:.1f}</b>  |  P&amp;F {s.pnf_column}  |  "
                 f"BB[{s.bb_lower:.2f} / {s.bb_middle:.2f} / {s.bb_upper:.2f}]"
             )
         lines.append("")
@@ -94,10 +107,13 @@ def format_scan_summary(
             tag = "  <b>[NEW]</b>" if s.ticker in fresh_candidates else ""
             lines.append(
                 f"  <b>{s.candidate}</b>  {star(s.ticker)}{s.ticker}  ${s.last_close:.2f}  "
-                f"(RSI {s.rsi:.1f}, P&amp;F {s.pnf_column or '?'}, waiting on {need}){tag}"
+                f"(RSI now {s.rsi:.1f}, P&amp;F {s.pnf_column or '?'}, waiting on {need}){tag}"
             )
         lines.append("")
-    lines.append("<i>★ = Major Watchlist ticker</i>" if watch else "")
+    legend = []
+    if watch: legend.append("★ = Major Watchlist")
+    if ibd50: legend.append("🔥 = IBD 50")
+    lines.append(f"<i>{'   '.join(legend)}</i>" if legend else "")
 
     if not entries and not candidates:
         lines.append(f"<i>All quiet. {len(quiet)} stocks scanned, no candidates or entries.</i>")
@@ -110,6 +126,7 @@ def send_scan_summary(
     signals: List[StockSignal],
     fresh_entries: Optional[Set[str]] = None,
     fresh_candidates: Optional[Set[str]] = None,
+    ibd50_tickers: Optional[Set[str]] = None,
 ) -> None:
     """
     Silent if nothing fresh (or nothing at all). Sound only when at least one
@@ -119,6 +136,6 @@ def send_scan_summary(
     fresh_candidates = fresh_candidates or set()
     has_fresh = bool(fresh_entries or fresh_candidates)
     send_telegram(
-        format_scan_summary(breadth, signals, fresh_entries, fresh_candidates),
+        format_scan_summary(breadth, signals, fresh_entries, fresh_candidates, ibd50_tickers),
         silent=not has_fresh,
     )

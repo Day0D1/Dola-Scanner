@@ -64,6 +64,15 @@ def init_db() -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS custom_watchlists (
+            name TEXT PRIMARY KEY,
+            tickers_json TEXT NOT NULL,
+            source_url TEXT,
+            as_of_date TEXT,
+            fetched_at TEXT NOT NULL,
+            meta_json TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS daily_snapshot (
             date TEXT PRIMARY KEY,
             spx_signal TEXT,
@@ -248,6 +257,59 @@ def upsert_daily_snapshot(payload: dict) -> None:
             """,
             values,
         )
+
+
+# --- Custom watchlists (IBD 50, etc.) ------------------------------------
+
+def upsert_watchlist(
+    name: str,
+    tickers: list,
+    source_url: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+    meta: Optional[dict] = None,
+) -> None:
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    with _connect() as c:
+        c.execute(
+            """
+            INSERT INTO custom_watchlists
+                (name, tickers_json, source_url, as_of_date, fetched_at, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                tickers_json = excluded.tickers_json,
+                source_url   = excluded.source_url,
+                as_of_date   = excluded.as_of_date,
+                fetched_at   = excluded.fetched_at,
+                meta_json    = excluded.meta_json
+            """,
+            (
+                name,
+                json.dumps(sorted(set(tickers))),
+                source_url,
+                as_of_date,
+                now_iso,
+                json.dumps(meta) if meta is not None else None,
+            ),
+        )
+
+
+def get_watchlist(name: str) -> Optional[dict]:
+    with _connect() as c:
+        row = c.execute(
+            "SELECT name, tickers_json, source_url, as_of_date, fetched_at, meta_json "
+            "FROM custom_watchlists WHERE name=?",
+            (name,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "name": row[0],
+        "tickers": json.loads(row[1] or "[]"),
+        "source_url": row[2],
+        "as_of_date": row[3],
+        "fetched_at": row[4],
+        "meta": json.loads(row[5]) if row[5] else None,
+    }
 
 
 def get_daily_history(limit: int = 200) -> list:

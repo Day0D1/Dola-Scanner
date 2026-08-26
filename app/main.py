@@ -22,10 +22,13 @@ from fastapi.templating import Jinja2Templates
 import dataclasses
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from scanner import config, data, indicators, store, universe
+from scanner import config, data, ibd50, indicators, store, universe
 from scanner.breadth import read_breadth
 from scanner.notify import send_scan_summary
 from scanner.signals import StockSignal, evaluate_stock
+
+
+IBD50_WATCHLIST_NAME = "ibd50"
 
 
 def _mask_signal(s: StockSignal) -> StockSignal:
@@ -93,11 +96,57 @@ def _scan_universe_tickers() -> list[str]:
         tickers = list(config.MVP_UNIVERSE)
     if getattr(config, "MAJOR_WATCHLIST", None):
         tickers = sorted(set(tickers) | set(config.MAJOR_WATCHLIST))
+    ibd = _ibd50_watchlist_set()
+    if ibd:
+        tickers = sorted(set(tickers) | ibd)
     return tickers
 
 
 def _major_watchlist_set() -> set:
     return set(getattr(config, "MAJOR_WATCHLIST", []) or [])
+
+
+def _ibd50_watchlist_set() -> set:
+    try:
+        row = store.get_watchlist(IBD50_WATCHLIST_NAME)
+        return set(row["tickers"]) if row else set()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ibd50] get_watchlist failed: {e}")
+        return set()
+
+
+def _refresh_ibd50(force: bool = False) -> dict:
+    """Fetch the current IBD 50 list from CapForce and persist to DB.
+
+    Returns a summary dict so API callers see what happened. If force=False
+    and the DB already has today's snapshot, we skip the network call.
+    """
+    existing = store.get_watchlist(IBD50_WATCHLIST_NAME)
+    if existing and not force:
+        today_iso = dt.date.today().isoformat()
+        if existing.get("as_of_date") == today_iso:
+            return {"status": "cached", "as_of_date": today_iso, "count": len(existing["tickers"])}
+
+    try:
+        snap = ibd50.fetch_ibd50()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ibd50] fetch failed: {e}")
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    store.upsert_watchlist(
+        IBD50_WATCHLIST_NAME,
+        snap.tickers,
+        source_url=snap.source_url,
+        as_of_date=snap.as_of_date,
+        meta={"raw_count": snap.raw_count, "fetched_at": snap.fetched_at},
+    )
+    print(f"[ibd50] refreshed: {len(snap.tickers)} tickers as of {snap.as_of_date}")
+    return {
+        "status": "refreshed",
+        "as_of_date": snap.as_of_date,
+        "count": len(snap.tickers),
+        "tickers": snap.tickers,
+    }
 
 
 def _run_scan_sync(notify: bool = True) -> None:
@@ -192,7 +241,10 @@ def _run_scan_sync(notify: bool = True) -> None:
 
         if notify:
             try:
-                send_scan_summary(breadth, masked_signals, fresh_entries, fresh_candidates)
+                send_scan_summary(
+                    breadth, masked_signals, fresh_entries, fresh_candidates,
+                    ibd50_tickers=_ibd50_watchlist_set(),
+                )
             except Exception as e:  # noqa: BLE001
                 print(f"[scan] telegram send failed: {e}")
     except Exception as e:  # noqa: BLE001
@@ -223,12 +275,27 @@ def _scheduled_scan() -> None:
 async def lifespan(_app: FastAPI):
     global _scheduler
     store.init_db()
+
+    # Seed the IBD 50 list SYNCHRONOUSLY before kicking off the first scan, so
+    # the merged universe includes IBD 50 tickers from the very first scan.
+    # Costs a few extra seconds at startup; worth it. Errors are logged but
+    # non-fatal — a missing IBD 50 seed just means the first scan skips those
+    # tickers until the Monday cron catches up.
+    try:
+        existing = store.get_watchlist(IBD50_WATCHLIST_NAME)
+        if not existing:
+            _refresh_ibd50(force=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ibd50] startup seed failed: {e}")
+
     # First scan on startup so the dashboard is populated immediately.
     _start_scan_bg(notify=False)
 
     # Hourly scan Mon-Fri 10:00 AM - 4:00 PM ET (intraday), plus an EOD scan at
     # 4:45 PM ET so any P&F flip from today's actual close fires an alert the
-    # same evening instead of waiting for tomorrow's 10 AM scan.
+    # same evening instead of waiting for tomorrow's 10 AM scan. Weekly IBD 50
+    # refresh runs Monday 8:00 AM ET (before the 10 AM scan) so the fresh list
+    # is in the universe for the first scan of the week.
     _scheduler = BackgroundScheduler(timezone=ET)
     _scheduler.add_job(
         _scheduled_scan,
@@ -244,8 +311,15 @@ async def lifespan(_app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    _scheduler.add_job(
+        lambda: _refresh_ibd50(force=True),
+        CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=ET),
+        id="ibd50_refresh",
+        max_instances=1,
+        coalesce=True,
+    )
     _scheduler.start()
-    for jid in ("hourly_scan", "eod_scan"):
+    for jid in ("hourly_scan", "eod_scan", "ibd50_refresh"):
         j = _scheduler.get_job(jid)
         if j:
             print(f"[scheduler] {jid} next run: {j.next_run_time}")
@@ -259,6 +333,12 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Dola Options Scanner", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+# Bust the browser cache for static assets whenever the app restarts. Passed
+# into every template as `asset_v`; templates append `?v={{ asset_v }}` to
+# <script>/<link> href attrs. Cheap, correct, no filesystem probing needed.
+_ASSET_VERSION = str(int(time.time()))
+templates.env.globals["asset_v"] = _ASSET_VERSION
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -287,6 +367,7 @@ def _get_ticker_to_sector() -> dict:
 
 def _signal_to_dict(s: StockSignal) -> dict:
     watch = _major_watchlist_set()
+    ibd = _ibd50_watchlist_set()
     return {
         "ticker": s.ticker,
         "sector": _get_ticker_to_sector().get(s.ticker, "Unknown"),
@@ -300,6 +381,7 @@ def _signal_to_dict(s: StockSignal) -> dict:
         "entry_trigger": s.entry_trigger,
         "band_pierce_today": s.band_pierce_today,
         "on_watchlist": s.ticker in watch,
+        "on_ibd50": s.ticker in ibd,
     }
 
 
@@ -484,6 +566,27 @@ def api_schedule():
             for j in jobs
         ],
     }
+
+
+@app.get("/api/watchlists/ibd50")
+def api_ibd50_get():
+    row = store.get_watchlist(IBD50_WATCHLIST_NAME)
+    if not row:
+        return {"status": "empty", "tickers": [], "as_of_date": None, "fetched_at": None}
+    return {
+        "status": "ok",
+        "tickers": row["tickers"],
+        "count": len(row["tickers"]),
+        "as_of_date": row["as_of_date"],
+        "fetched_at": row["fetched_at"],
+        "source_url": row["source_url"],
+    }
+
+
+@app.post("/api/watchlists/ibd50/refresh")
+def api_ibd50_refresh():
+    """Manual trigger: fetch the current IBD 50 from CapForce and persist."""
+    return _refresh_ibd50(force=True)
 
 
 _TIMEFRAMES = {
@@ -925,6 +1028,46 @@ def fair_value_page(request: Request, ticker: str):
     return templates.TemplateResponse(request, "fair_value.html", {"ticker": ticker.upper()})
 
 
+def _fair_value_ohlc_and_pnf_meta(key: str, lookback: int):
+    """Route a fair-value key to its OHLC source and P&F configuration.
+
+    Returns (ohlc, pnf_meta) where pnf_meta describes how to compute the P&F
+    column and CHANGE-in-boxes for this instrument. Stocks and SPX use
+    percentage-scaled boxes; VIX and BPNYA use fixed 1-pt boxes (traditional).
+    """
+    upper = key.upper()
+    meta = _INDEX_KEYS.get(upper)
+    if meta is None:
+        return data.fetch_stock(upper, lookback), {
+            "pnf_type": "percentage",
+            "box": config.PNF_BOX_PCT,
+            "reversal": config.PNF_REVERSAL,
+        }
+    if meta["source"] == "yfinance":
+        ohlc = data.fetch_index(meta["symbol"], lookback)
+    elif meta["source"] == "internal_bpnya":
+        ohlc = _bpnya_series_as_ohlc()
+    else:
+        ohlc = pd.DataFrame()
+
+    if upper == "SPX":
+        return ohlc, {"pnf_type": "percentage", "box": config.PNF_BOX_PCT, "reversal": config.PNF_REVERSAL}
+    if upper == "VIX":
+        return ohlc, {"pnf_type": "traditional", "box": config.VIX_PNF_BOX_SIZE, "reversal": config.VIX_PNF_REVERSAL}
+    if upper == "BPNYA":
+        from scanner.breadth import BPNYA_BOX_SIZE, BPNYA_REVERSAL
+        return ohlc, {"pnf_type": "traditional", "box": BPNYA_BOX_SIZE, "reversal": BPNYA_REVERSAL}
+    # Any other index falls back to percentage.
+    return ohlc, {"pnf_type": "percentage", "box": config.PNF_BOX_PCT, "reversal": config.PNF_REVERSAL}
+
+
+def _box_idx(price: float, pnf_meta: dict) -> int:
+    """Which P&F box a price sits in, respecting box scale (log-% or linear)."""
+    if pnf_meta["pnf_type"] == "traditional":
+        return int(price // pnf_meta["box"])
+    return _price_to_box_idx(price, pnf_meta["box"])
+
+
 @app.get("/api/fair_value/{ticker}")
 def api_fair_value(
     ticker: str,
@@ -934,7 +1077,7 @@ def api_fair_value(
     rsi_period: Optional[int] = None,
 ):
     ticker = ticker.upper()
-    ohlc = data.fetch_stock(ticker, _lookback_for_days(days))
+    ohlc, pnf_meta = _fair_value_ohlc_and_pnf_meta(ticker, _lookback_for_days(days))
     if ohlc.empty:
         return JSONResponse({"error": "no data"}, status_code=404)
 
@@ -944,7 +1087,10 @@ def api_fair_value(
 
     bb = indicators.bollinger_bands(ohlc["close"], bp, bs)
     rsi_series = indicators.rsi(ohlc["close"], rp)
-    pnf_cols = indicators.point_figure(ohlc["close"], config.PNF_BOX_PCT, config.PNF_REVERSAL)
+    if pnf_meta["pnf_type"] == "traditional":
+        pnf_cols = indicators.point_figure_traditional(ohlc["close"], pnf_meta["box"], pnf_meta["reversal"])
+    else:
+        pnf_cols = indicators.point_figure(ohlc["close"], pnf_meta["box"], pnf_meta["reversal"])
 
     tail = ohlc.tail(max(1, days))
     date_strs = [str(d) for d in tail.index]
@@ -971,11 +1117,12 @@ def api_fair_value(
         rsi_val = None if pd.isna(rsi_series.loc[d]) else float(rsi_series.loc[d])
         col_type = _col_type_for(d_str)
 
-        # CHANGE = signed day-over-day P&F box move.
-        # Positive when today's close moved up into higher box(es); negative when it moved down.
+        # CHANGE = signed day-over-day P&F box move. Positive = up-boxes today.
+        # Uses the same box scale that P&F uses for THIS instrument (log-% for
+        # stocks/SPX, linear 1-pt for VIX/BPNYA) so the count is meaningful.
         change: Optional[int] = None
         if prev_close is not None and prev_close > 0 and close > 0:
-            change = _price_to_box_idx(close, config.PNF_BOX_PCT) - _price_to_box_idx(prev_close, config.PNF_BOX_PCT)
+            change = _box_idx(close, pnf_meta) - _box_idx(prev_close, pnf_meta)
 
         snap = daily_snap.get(d_str, {})
         days_data.append({
@@ -1001,6 +1148,7 @@ def api_fair_value(
     return {
         "ticker": ticker,
         "days": days_data,
+        "pnf_meta": pnf_meta,
         "settings": {
             "bb_period": bp,
             "bb_stddev": bs,

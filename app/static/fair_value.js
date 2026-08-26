@@ -4,6 +4,19 @@ const T = window.FV_TICKER;
 const TIMEFRAMES = [30, 60, 90, 180, 270, 252, 378, 504];
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 let currentDays = 90;
+let cellScale = 1.0;              // pinch/ctrl-wheel zoom multiplier
+const CELL_SCALE_MIN = 0.5;
+const CELL_SCALE_MAX = 3.0;
+
+// Measure the topbar height for the sticky-header offset so freeze panes stick
+// flush against the topbar regardless of theme/font tweaks.
+function updateTopbarHeightVar() {
+  const tb = document.querySelector('.topbar');
+  if (tb) document.documentElement.style.setProperty('--topbar-h', `${tb.offsetHeight}px`);
+}
+window.addEventListener('load', updateTopbarHeightVar);
+window.addEventListener('resize', updateTopbarHeightVar);
+updateTopbarHeightVar();
 
 function fmtDate(iso) {
   const p = iso.split("-");
@@ -12,14 +25,25 @@ function fmtDate(iso) {
 }
 
 // 1% log-scale grid: each level is exactly 1% above the previous, matching
-// the percentage-based P&F box grid the app uses everywhere else.
+// the percentage-based P&F box grid the app uses everywhere else. For
+// TRADITIONAL-scale instruments (VIX, BPNYA — fixed 1-point boxes) the grid
+// switches to linear steps of the box size so the row count stays sane and
+// each row corresponds to exactly one P&F box.
 const LOG_STEP = 1.01;
 const LN_STEP = Math.log(LOG_STEP);
 
+// pnfMeta is the {pnf_type, box, reversal} object from the /api/fair_value
+// response. Persist it for use across helpers.
+let currentPnfMeta = { pnf_type: "percentage", box: 1.0 };
+
+function isTraditional() { return currentPnfMeta.pnf_type === "traditional"; }
+
 function priceToBoxIdx(price) {
+  if (isTraditional()) return Math.floor(price / currentPnfMeta.box);
   return Math.floor(Math.log(price) / LN_STEP);
 }
 function boxIdxToPrice(idx) {
+  if (isTraditional()) return idx * currentPnfMeta.box;
   return Math.exp(idx * LN_STEP);
 }
 function priceDigitsFor(price) {
@@ -52,6 +76,7 @@ function nearestLogLevel(price) {
 }
 function eqLevel(a, b) {
   if (a == null || b == null) return false;
+  if (isTraditional()) return Math.abs(a - b) < currentPnfMeta.box * 0.5;
   return Math.abs(a - b) / Math.max(a, b) < 1e-6;
 }
 
@@ -81,6 +106,10 @@ function render(data) {
       '<div class="fv-loading">No data.</div>';
     return;
   }
+  // Adopt this instrument's P&F scale for the price grid (log-% for stocks/SPX,
+  // linear 1-pt for VIX/BPNYA). Falls back to percentage if the API didn't
+  // include pnf_meta (backwards-compat).
+  currentPnfMeta = data.pnf_meta || { pnf_type: "percentage", box: 1.0 };
 
   let lo = Infinity, hi = -Infinity;
   for (const d of days) {
@@ -165,8 +194,18 @@ function render(data) {
 
   const container = document.getElementById("fvContainer");
   container.innerHTML = html;
-  container.style.setProperty("--fv-cell-w", `${cellWidth(days.length)}px`);
-  container.style.setProperty("--fv-font-size", cellFontSize(days.length));
+  applyCellSize(days.length);
+}
+
+function applyCellSize(numDays) {
+  const container = document.getElementById("fvContainer");
+  if (!container) return;
+  const baseW = cellWidth(numDays);
+  const baseF = parseFloat(cellFontSize(numDays));
+  const w = Math.max(6, Math.round(baseW * cellScale));
+  const f = Math.max(7, Math.round(baseF * cellScale));
+  container.style.setProperty("--fv-cell-w", `${w}px`);
+  container.style.setProperty("--fv-font-size", `${f}px`);
 }
 
 function stepZoom(delta) {
@@ -201,7 +240,60 @@ document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
   if (e.key === "+" || e.key === "=") stepZoom(-1);
   if (e.key === "-" || e.key === "_") stepZoom(+1);
+  // Ctrl+0 resets the pinch/wheel cell-size zoom
+  if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+    e.preventDefault();
+    cellScale = 1.0;
+    const n = document.querySelectorAll("#fvContainer .fv-table thead tr:first-child td").length || 90;
+    applyCellSize(n);
+  }
 });
+
+// Pinch to zoom (touch) + Ctrl+wheel (desktop) — both scale cell size, mirroring
+// the Excel spreadsheet feel the user asked for. Container-scoped so it doesn't
+// hijack the whole page.
+(function attachPinchZoom() {
+  const container = document.getElementById("fvContainer");
+  if (!container) return;
+
+  function currentDayCount() {
+    return document.querySelectorAll("#fvContainer .fv-table thead tr:first-child td").length || 90;
+  }
+  function nudge(mult) {
+    cellScale = Math.max(CELL_SCALE_MIN, Math.min(CELL_SCALE_MAX, cellScale * mult));
+    applyCellSize(currentDayCount());
+  }
+
+  container.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    nudge(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+  }, { passive: false });
+
+  let pinchStartDist = 0;
+  let pinchStartScale = 1;
+  function dist(t1, t2) {
+    const dx = t1.clientX - t2.clientX;
+    const dy = t1.clientY - t2.clientY;
+    return Math.hypot(dx, dy);
+  }
+  container.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      pinchStartDist = dist(e.touches[0], e.touches[1]);
+      pinchStartScale = cellScale;
+    }
+  }, { passive: true });
+  container.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2 && pinchStartDist > 0) {
+      e.preventDefault();
+      const d = dist(e.touches[0], e.touches[1]);
+      const s = pinchStartScale * (d / pinchStartDist);
+      cellScale = Math.max(CELL_SCALE_MIN, Math.min(CELL_SCALE_MAX, s));
+      applyCellSize(currentDayCount());
+    }
+  }, { passive: false });
+  container.addEventListener("touchend", () => { pinchStartDist = 0; });
+})();
 
 // Wire the ticker search input to navigate to another stock's Fair Value page.
 let allTickers = [];

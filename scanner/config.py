@@ -18,6 +18,12 @@ RSI_PERIOD = 10
 RSI_OVERSOLD = 39.0
 RSI_OVERBOUGHT = 70.0
 
+# How far back to search for the qualifying activation bar (BB pierce + RSI in
+# zone). Once that combination happens on any bar within this window, the
+# candidate stays active until the window expires — even if today's RSI is out
+# of zone. The entry then fires on the P&F flip, alert prints the current RSI.
+CANDIDATE_LOOKBACK_DAYS = 60
+
 PNF_BOX_PCT = 1.0
 PNF_REVERSAL = 3
 

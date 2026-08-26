@@ -42,6 +42,15 @@ async function triggerRefresh(notify = false) {
   return r.json();
 }
 
+async function fetchIbd50() {
+  try { const r = await fetch("/api/watchlists/ibd50"); return r.json(); } catch { return null; }
+}
+
+async function refreshIbd50Now() {
+  const r = await fetch("/api/watchlists/ibd50/refresh", { method: "POST" });
+  return r.json();
+}
+
 function _settingsToQuery(s) {
   const parts = [];
   if (s.bb_period != null)    parts.push(`bb_period=${s.bb_period}`);
@@ -162,6 +171,7 @@ function passesFilter(s) {
   }
   switch (f.signal) {
     case "MAJOR":       if (!s.on_watchlist) return false; break;
+    case "IBD50":       if (!s.on_ibd50) return false; break;
     case "ENTRIES":     if (!s.entry_trigger) return false; break;
     case "CANDIDATES":  if (!s.candidate) return false; break;
     case "ELON":        if (s.candidate !== "ELON") return false; break;
@@ -235,8 +245,9 @@ function makeStockCard(s) {
   const pnfVal = s.pnf_column || "–";
 
   const starHtml = s.on_watchlist ? '<span class="major-star" title="Major Watchlist">&#9733;</span>' : "";
+  const fireHtml = s.on_ibd50 ? '<span class="ibd-fire" title="IBD 50">&#128293;</span>' : "";
   card.innerHTML = `
-    <div class="row"><span class="ticker">${starHtml}${s.ticker}</span><span class="price">${price}</span></div>
+    <div class="row"><span class="ticker">${starHtml}${fireHtml}${s.ticker}</span><span class="price">${price}</span></div>
     <div class="sector">${s.sector || ""}</div>
     <div class="meta">
       <span>RSI <span class="${rsiCls}">${rsiVal}</span></span>
@@ -281,10 +292,13 @@ function renderCards() {
   // Major Watchlist: all major-watch stocks (sorted by signal strength via existing sort default).
   const majorAll = state.signals.filter(s => s.on_watchlist);
   const major = sortSignalStrength(majorAll);
+  const ibdAll = state.signals.filter(s => s.on_ibd50);
+  const ibd = sortSignalStrength(ibdAll);
 
   paintSection("entriesSection", "entriesCount", "entriesGrid", entries);
   paintSection("candidatesSection", "candidatesCount", "candidatesGrid", candidates);
   paintSection("majorSection", "majorCount", "majorGrid", major);
+  paintSection("ibd50Section", "ibd50Count", "ibd50Grid", ibd);
   paintSection("quietSection", "quietCount", "quietGrid", sorted);
   $("resultsCount").textContent = sorted.length;
 }
@@ -347,6 +361,19 @@ async function refreshUI() {
   } else {
     $("nextScan").textContent = "auto-scan idle";
   }
+
+  refreshIbd50Meta();
+}
+
+async function refreshIbd50Meta() {
+  const el = $("ibd50AsOf");
+  if (!el) return;
+  const data = await fetchIbd50();
+  if (!data || data.status !== "ok") {
+    el.textContent = data && data.status === "empty" ? "(never fetched)" : "";
+    return;
+  }
+  el.textContent = `— ${data.count} tickers, as of ${data.as_of_date || "?"}`;
 }
 
 // ---- Modal + charts ---------------------------------------------------
@@ -367,15 +394,11 @@ function openChartModal(kind, key) {
   $("candlestickChart").innerHTML = "";
   $("pnfChart").innerHTML = "";
   if ($("pnfChartFV")) $("pnfChartFV").innerHTML = "";
-  // Show/hide Fair Value link (stocks only, not indices).
+  // Show the Fair Value / Time Series link for stocks AND indices (SPX/VIX/BPNYA).
   const fvLink = $("fvLink");
   if (fvLink) {
-    if (kind === "stock") {
-      fvLink.href = `/fair_value/${encodeURIComponent(key)}`;
-      fvLink.style.display = "";
-    } else {
-      fvLink.style.display = "none";
-    }
+    fvLink.href = `/fair_value/${encodeURIComponent(key)}`;
+    fvLink.style.display = "";
   }
   loadCharts();
 }
@@ -788,6 +811,30 @@ $("refreshBtn").addEventListener("click", async () => {
     btn.disabled = false;
     btn.textContent = "Refresh scan";
     btn.classList.remove("pulsing");
+  }
+});
+
+$("ibd50Refresh")?.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const btn = $("ibd50Refresh");
+  const asOf = $("ibd50AsOf");
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "Refreshing…";
+  try {
+    const res = await refreshIbd50Now();
+    if (res && res.status === "refreshed") {
+      if (asOf) asOf.textContent = `— ${res.count} tickers, as of ${res.as_of_date || "?"}`;
+      // Trigger a fresh scan so the new list flows through immediately.
+      triggerRefresh(false).catch(() => {});
+    } else if (res && res.status === "cached") {
+      if (asOf) asOf.textContent = `— ${res.count} tickers, as of ${res.as_of_date} (already current)`;
+    } else if (res && res.status === "error") {
+      if (asOf) asOf.textContent = `— fetch failed: ${res.error}`;
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
   }
 });
 

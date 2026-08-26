@@ -84,33 +84,32 @@ def evaluate_stock(ticker: str, ohlc: pd.DataFrame) -> Optional[StockSignal]:
 
 def _detect_candidate(ohlc: pd.DataFrame, bb: pd.DataFrame, rsi_series: pd.Series) -> Candidate:
     """
-    Option B semantics: a candidate stays active as long as RSI(5) stays in the zone
-    (<30 for ELON, >70 for MUSK). It becomes active the moment any bar within the
-    current zone-streak has a wick that pierces the corresponding band.
+    Look back CANDIDATE_LOOKBACK_DAYS for the most recent qualifying activation
+    bar and return its type. A bar qualifies when:
+      ELON = low < BB_lower AND RSI < RSI_OVERSOLD at that bar
+      MUSK = high > BB_upper AND RSI > RSI_OVERBOUGHT at that bar
+    If today's RSI has since recovered out of the zone, the candidate is STILL
+    active — the entry fires on the P&F flip regardless of current RSI, and the
+    alert body prints the current RSI so the user sees the full context.
     """
     n = len(ohlc)
-    if n == 0 or pd.isna(rsi_series.iloc[-1]):
+    if n < 2:
         return None
+    lookback = getattr(config, "CANDIDATE_LOOKBACK_DAYS", 60)
+    start = max(0, n - lookback)
 
-    last_rsi = float(rsi_series.iloc[-1])
-
-    if last_rsi < config.RSI_OVERSOLD:
-        start = n - 1
-        while start > 0 and rsi_series.iloc[start - 1] < config.RSI_OVERSOLD:
-            start -= 1
-        for i in range(start, n):
-            lo = ohlc["low"].iloc[i]
-            lb = bb["lower"].iloc[i]
-            if not pd.isna(lb) and lo < lb:
-                return "ELON"
-    elif last_rsi > config.RSI_OVERBOUGHT:
-        start = n - 1
-        while start > 0 and rsi_series.iloc[start - 1] > config.RSI_OVERBOUGHT:
-            start -= 1
-        for i in range(start, n):
-            hi = ohlc["high"].iloc[i]
-            ub = bb["upper"].iloc[i]
-            if not pd.isna(ub) and hi > ub:
-                return "MUSK"
+    for i in range(n - 1, start - 1, -1):
+        rsi_i = rsi_series.iloc[i]
+        if pd.isna(rsi_i):
+            continue
+        r = float(rsi_i)
+        lb = bb["lower"].iloc[i]
+        ub = bb["upper"].iloc[i]
+        lo = float(ohlc["low"].iloc[i])
+        hi = float(ohlc["high"].iloc[i])
+        if not pd.isna(lb) and lo < float(lb) and r < config.RSI_OVERSOLD:
+            return "ELON"
+        if not pd.isna(ub) and hi > float(ub) and r > config.RSI_OVERBOUGHT:
+            return "MUSK"
 
     return None

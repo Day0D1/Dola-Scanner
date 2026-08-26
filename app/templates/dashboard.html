@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_v }}" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 <body>
@@ -63,6 +63,7 @@
       <div class="chip-group" id="signalChips">
         <button class="chip active" data-signal="ALL">All</button>
         <button class="chip" data-signal="MAJOR">&#9733; Major</button>
+        <button class="chip" data-signal="IBD50">&#128293; IBD 50</button>
         <button class="chip" data-signal="ENTRIES">Entries</button>
         <button class="chip" data-signal="CANDIDATES">Candidates</button>
         <button class="chip elon" data-signal="ELON">ELON</button>
@@ -119,6 +120,18 @@
       <div class="section-hint">Your priority stocks — sorted by signal strength</div>
     </div>
     <div id="majorGrid" class="card-grid"></div>
+  </section>
+
+  <section id="ibd50Section" class="section">
+    <div class="section-head">
+      <h2>&#128293; IBD 50 <span id="ibd50Count" class="count">0</span></h2>
+      <div class="section-hint">
+        Investor's Business Daily top-50 growth stocks — refreshed weekly Mondays 8 AM ET.
+        <span id="ibd50AsOf" class="ibd50-asof"></span>
+        <button id="ibd50Refresh" class="btn ghost btn-inline" type="button" title="Fetch the latest list now">Refresh now</button>
+      </div>
+    </div>
+    <div id="ibd50Grid" class="card-grid"></div>
   </section>
 
   <section id="quietSection" class="section">
@@ -193,7 +206,7 @@
     </div>
   </div>
 
-  <script src="/static/autocomplete.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/autocomplete.js?v={{ asset_v }}"></script>
+  <script src="/static/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

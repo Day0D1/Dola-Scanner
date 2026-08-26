@@ -37,18 +37,35 @@ def fetch_polygon_daily(ticker: str, start: str, end: str, adjusted: bool = True
     return df.set_index("date")[["open", "high", "low", "close", "volume"]]
 
 
-def fetch_yfinance_daily(symbol: str, period: str = "2y") -> pd.DataFrame:
-    """Daily bars from Yahoo Finance for indices (^GSPC, ^VIX)."""
+def fetch_yfinance_daily(symbol: str, period: str = "2y", retries: int = 3) -> pd.DataFrame:
+    """Daily bars from Yahoo Finance for indices (^GSPC, ^VIX).
+
+    Yahoo transiently rate-limits and occasionally returns empty frames without
+    raising — retry with backoff so a one-off flake doesn't zero out the whole
+    breadth reading. Empty frame after all retries = caller should fall back to
+    a stored snapshot.
+    """
+    import time as _t
     import yfinance as yf
 
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(period=period, interval="1d", auto_adjust=True)
-    if df.empty:
-        return pd.DataFrame()
-    df.columns = [c.lower() for c in df.columns]
-    df.index = pd.to_datetime(df.index).date
-    df.index.name = "date"
-    return df[["open", "high", "low", "close", "volume"]]
+    last_err = None
+    for attempt in range(retries):
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, interval="1d", auto_adjust=True)
+            if not df.empty:
+                df.columns = [c.lower() for c in df.columns]
+                df.index = pd.to_datetime(df.index).date
+                df.index.name = "date"
+                return df[["open", "high", "low", "close", "volume"]]
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"[yfinance] {symbol} attempt {attempt+1}/{retries} failed: {e}")
+        if attempt < retries - 1:
+            _t.sleep(2 ** attempt)  # 1s, 2s
+    if last_err:
+        print(f"[yfinance] {symbol} gave up after {retries} attempts: {last_err}")
+    return pd.DataFrame()
 
 
 def fetch_stock(ticker: str, lookback_days: int = 400) -> pd.DataFrame:

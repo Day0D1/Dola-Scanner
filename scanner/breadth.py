@@ -130,43 +130,67 @@ def _bpnya_column_and_history():
     return (cols[-1].type if cols else None), latest, prior
 
 
+def _fallback_from_snapshot(prefix: str) -> PillarReading:
+    """Hydrate an SPX or VIX pillar from yesterday's stored daily_snapshot when
+    yfinance is unreachable. Prefix is 'spx' or 'vix'. Regime/risk get computed
+    off a stale-but-valid column instead of collapsing to null.
+    """
+    from scanner import store
+    try:
+        rows = store.get_daily_history(limit=1)
+    except Exception as e:  # noqa: BLE001
+        print(f"[breadth] snapshot fallback for {prefix} failed: {e}")
+        return PillarReading(column=None, level=None, change=None, signal=None)
+    if not rows:
+        return PillarReading(column=None, level=None, change=None, signal=None)
+    r = rows[0]
+    col = r.get(f"{prefix}_column")
+    lvl = r.get(f"{prefix}_level")
+    chg = r.get(f"{prefix}_change")
+    if col is not None:
+        print(f"[breadth] using STALE {prefix.upper()} snapshot from {r.get('date')} — yfinance was empty")
+    sig = ("BUY" if col == "X" else ("SELL" if col == "O" else None)) if prefix == "spx" else col
+    return PillarReading(column=col, level=lvl, change=chg, signal=sig)
+
+
 def read_breadth() -> BreadthReading:
     spx_ohlc = data.fetch_index(config.SPX_YF_SYMBOL, config.LOOKBACK_DAYS)
     vix_ohlc = data.fetch_index(config.VIX_YF_SYMBOL, config.LOOKBACK_DAYS)
 
     # SPX pillar — uses the shared global P&F config (same as other stocks).
-    spx_col, spx_boxes = (None, None)
-    spx_level: Optional[float] = None
     if not spx_ohlc.empty:
         spx_col, spx_boxes = _current_column_and_boxes(
             spx_ohlc["close"], pnf_type="percentage",
         )
         spx_level = float(spx_ohlc["close"].iloc[-1])
-    spx = PillarReading(
-        column=spx_col,
-        level=round(spx_level, 2) if spx_level is not None else None,
-        change=spx_boxes,  # boxes in current column = trend maturity
-        signal=("BUY" if spx_col == "X" else ("SELL" if spx_col == "O" else None)),
-    )
+        spx = PillarReading(
+            column=spx_col,
+            level=round(spx_level, 2),
+            change=spx_boxes,
+            signal=("BUY" if spx_col == "X" else ("SELL" if spx_col == "O" else None)),
+        )
+    else:
+        spx = _fallback_from_snapshot("spx")
 
     # VIX pillar (TRADITIONAL 1.0-pt box, 2-reversal — matches StockCharts VIX P&F).
-    vix_col, _ = (None, None)
-    vix_level: Optional[float] = None
-    vix_change: Optional[float] = None
     if not vix_ohlc.empty:
         vix_col, _ = _current_column_and_boxes(
             vix_ohlc["close"], config.VIX_PNF_BOX_SIZE, config.VIX_PNF_REVERSAL,
             pnf_type="traditional",
         )
         vix_level = float(vix_ohlc["close"].iloc[-1])
-        if len(vix_ohlc) >= 2:
-            vix_change = round(vix_level - float(vix_ohlc["close"].iloc[-2]), 2)
-    vix = PillarReading(
-        column=vix_col,
-        level=round(vix_level, 2) if vix_level is not None else None,
-        change=vix_change,
-        signal=vix_col,
-    )
+        vix_change = (
+            round(vix_level - float(vix_ohlc["close"].iloc[-2]), 2)
+            if len(vix_ohlc) >= 2 else None
+        )
+        vix = PillarReading(
+            column=vix_col,
+            level=round(vix_level, 2),
+            change=vix_change,
+            signal=vix_col,
+        )
+    else:
+        vix = _fallback_from_snapshot("vix")
 
     # BPNYA pillar
     bpnya_col, bpnya_latest, bpnya_prior = _bpnya_column_and_history()
@@ -180,7 +204,7 @@ def read_breadth() -> BreadthReading:
         signal=bpnya_col,
     )
 
-    regime = compute_regime(spx_col)
-    risk = compute_risk(regime, bpnya_col, vix_col)
+    regime = compute_regime(spx.column)
+    risk = compute_risk(regime, bpnya.column, vix.column)
 
     return BreadthReading(spx=spx, bpnya=bpnya, vix=vix, regime=regime, risk=risk)
