@@ -1,0 +1,81 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Time Series{% endblock %}
+{% block page_name %}Time Series{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Time Series</h1>
+    <div class="page-subtitle">Historical grid + Visual Mode · every scan value at every date</div>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <div>
+    <div class="section-head"><div class="section-title">Indices</div></div>
+    <div class="grid g-3">
+      <a href="/v2/time-series/SPX" class="card clickable stack-2">
+        <div class="card-label">SPX</div>
+        <div class="text-ink-2">S&amp;P 500 · 1% log grid</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">27 rows / 30-day view</div>
+      </a>
+      <a href="/v2/time-series/VIX" class="card clickable stack-2">
+        <div class="card-label">VIX</div>
+        <div class="text-ink-2">Volatility · 1-pt grid</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">~22 rows / 30-day view</div>
+      </a>
+      <a href="/v2/time-series/BPNYA" class="card clickable stack-2">
+        <div class="card-label">BPNYA</div>
+        <div class="text-ink-2">NYSE Bullish % · 1-pt grid</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">Accumulates one row per scan</div>
+      </a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-label" style="margin-bottom: var(--sp-2);">Any stock</div>
+    <div class="search-input" style="width: 100%; max-width: 420px;">
+      <span class="search-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
+      </span>
+      <input id="tsSearch" class="input" type="search" placeholder="Type a ticker then Enter" autocomplete="off" style="width: 100%;" />
+    </div>
+    <div id="tsMatches" class="stack-1" style="margin-top: var(--sp-3);"></div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { $, el } from "/static/v2/shared.js?v={{ asset_v }}";
+  // /api/tickers returns [{ticker, sector}, ...]. We extract just tickers for
+  // this simple prefix match — no sector display on the landing.
+  let all = [];
+  fetch("/api/tickers").then((r) => r.json())
+    .then((d) => { all = (d.tickers || []).map((x) => typeof x === "string" ? x : x.ticker); });
+
+  function render(q) {
+    const host = $("tsMatches");
+    if (!q) { host.replaceChildren(); return; }
+    const up = q.toUpperCase();
+    const matches = all.filter((t) => t.startsWith(up)).slice(0, 8);
+    host.replaceChildren(...matches.map((t) => el(
+      "a", { href: `/v2/time-series/${t}`, class: "row-flex row-between",
+             style: { padding: "6px var(--sp-3)", borderRadius: "var(--r-sm)", background: "var(--panel-2)" } },
+      el("span", { class: "mono", style: { fontWeight: 700 } }, t),
+      el("span", { class: "text-ink-3", style: { fontSize: "var(--fs-xs)" } }, "open →"),
+    )));
+  }
+
+  $("tsSearch").addEventListener("input", (e) => render(e.target.value.trim()));
+  $("tsSearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const q = e.target.value.trim().toUpperCase();
+      const t = all.includes(q) ? q : all.find((x) => x.startsWith(q));
+      if (t) window.location.href = `/v2/time-series/${t}`;
+    }
+  });
+</script>
+{% endblock %}

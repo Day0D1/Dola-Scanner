@@ -1,0 +1,228 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola v2 — Components{% endblock %}
+{% block page_name %}Design system · Component gallery{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Design system</h1>
+    <div class="page-subtitle">Component gallery — verifies tokens, badges, cards, tables render as intended.</div>
+  </div>
+  <div class="page-actions">
+    <a href="/v2/" class="btn ghost">Back to Overview</a>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <section>
+    <div class="section-head"><div class="section-title">Palette</div></div>
+    <div class="grid g-auto">
+      {% for name, var in [
+        ("bg-0", "--bg-0"), ("bg-1", "--bg-1"), ("bg-2", "--bg-2"),
+        ("panel", "--panel"), ("panel-2", "--panel-2"), ("panel-3", "--panel-3"),
+        ("bull", "--bull"), ("bear", "--bear"), ("warn", "--warn"), ("accent", "--accent"),
+      ] %}
+      <div class="card" style="padding:12px;">
+        <div style="height:36px; border-radius:6px; background: var({{ var }}); border: 1px solid var(--border);"></div>
+        <div class="mono text-ink-3" style="font-size: var(--fs-xs); margin-top: 6px;">{{ var }}</div>
+        <div class="text-ink-2" style="font-size: var(--fs-xs);">{{ name }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Badges</div></div>
+    <div class="card">
+      <div class="row-3" style="flex-wrap: wrap; gap: 12px;">
+        <span class="badge bull">ELON</span>
+        <span class="badge bear">MUSK</span>
+        <span class="badge warn">WATCHING</span>
+        <span class="badge accent">NEW</span>
+        <span class="badge">NEUTRAL</span>
+        <span class="badge solid bull">SELL PUTS</span>
+        <span class="badge solid bear">SELL CALLS</span>
+        <span class="col-marker x">X</span>
+        <span class="col-marker o">O</span>
+        <span class="col-marker">–</span>
+        <span class="tag-star">★</span>
+        <span class="tag-fire">🔥</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Buttons</div></div>
+    <div class="card">
+      <div class="row-3" style="flex-wrap: wrap; gap: 12px;">
+        <button class="btn primary">Primary action</button>
+        <button class="btn">Default</button>
+        <button class="btn ghost">Ghost</button>
+        <button class="btn sm">Small</button>
+        <button class="btn xs">Extra small</button>
+        <button class="btn" disabled>Disabled</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Chips (filter buttons)</div></div>
+    <div class="card">
+      <div class="chip-row">
+        <button class="chip active">All</button>
+        <button class="chip">★ Major</button>
+        <button class="chip">🔥 IBD 50</button>
+        <button class="chip active bull">Entries</button>
+        <button class="chip">Candidates</button>
+        <button class="chip active bear">MUSK</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Cards — market state</div></div>
+    <div class="grid g-3">
+      <div class="card state-bull">
+        <div class="card-label">Regime</div>
+        <div class="card-value value-bull">BUY</div>
+        <div class="card-sub"><span class="text-ink-3">SPX P&F</span> <span class="col-marker x">X</span> <span class="mono text-ink-2">+6 boxes</span></div>
+      </div>
+      <div class="card state-warn">
+        <div class="card-label">Risk</div>
+        <div class="card-value value-warn">MEDIUM</div>
+        <div class="card-sub"><span class="text-ink-3">BPNYA</span> <span class="col-marker x">X</span> <span class="text-ink-3">·</span> <span class="text-ink-3">VIX</span> <span class="col-marker x">X</span></div>
+      </div>
+      <div class="card state-bear">
+        <div class="card-label">Risk</div>
+        <div class="card-value value-bear">HIGH</div>
+        <div class="card-sub"><span class="text-ink-3">BPNYA</span> <span class="col-marker o">O</span> <span class="text-ink-3">·</span> <span class="text-ink-3">VIX</span> <span class="col-marker x">X</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Cards — market pillars</div></div>
+    <div class="grid g-3">
+      <div class="card state-bull">
+        <div class="row-flex row-between">
+          <div class="stack-1">
+            <div class="card-label">SPX</div>
+            <div class="text-ink-3" style="font-size: var(--fs-xs); margin-top: 2px;">S&P 500</div>
+          </div>
+          <span class="col-marker x">X</span>
+        </div>
+        <div class="card-value small mono">7,686.45</div>
+        <div class="card-sub">
+          <span class="mono text-bull">+6 boxes</span>
+          <span class="text-ink-3">•</span>
+          <span class="text-ink-3 mono">P&F X</span>
+        </div>
+      </div>
+      <div class="card state-bull">
+        <div class="row-flex row-between">
+          <div class="stack-1">
+            <div class="card-label">BPNYA</div>
+            <div class="text-ink-3" style="font-size: var(--fs-xs); margin-top: 2px;">NYSE Bullish %</div>
+          </div>
+          <span class="col-marker x">X</span>
+        </div>
+        <div class="card-value small mono">50.40%</div>
+        <div class="card-sub">
+          <span class="mono text-bull">+6.26%</span>
+          <span class="text-ink-3">•</span>
+          <span class="text-ink-3 mono">P&F X</span>
+        </div>
+      </div>
+      <div class="card state-bull">
+        <div class="row-flex row-between">
+          <div class="stack-1">
+            <div class="card-label">VIX</div>
+            <div class="text-ink-3" style="font-size: var(--fs-xs); margin-top: 2px;">Volatility</div>
+          </div>
+          <span class="col-marker x">X</span>
+        </div>
+        <div class="card-value small mono">15.35</div>
+        <div class="card-sub">
+          <span class="mono text-bear">-0.10</span>
+          <span class="text-ink-3">•</span>
+          <span class="text-ink-3 mono">P&F X</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Signal table</div></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Time</th><th>Ticker</th><th>Setup</th><th>Action</th>
+            <th class="num">P&F</th><th class="num">RSI</th><th class="num">Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono text-ink-3">2m ago</td>
+            <td class="ticker"><span class="tag-star">★</span><span class="tag-fire">🔥</span> ANET</td>
+            <td><span class="badge bull">ELON</span></td>
+            <td><span class="badge solid bull">SELL PUTS</span></td>
+            <td class="num"><span class="col-marker x">X</span></td>
+            <td class="num mono">41.25</td>
+            <td class="num mono text-ink">$327.81</td>
+          </tr>
+          <tr>
+            <td class="mono text-ink-3">4m ago</td>
+            <td class="ticker"><span class="tag-star">★</span> AMD</td>
+            <td><span class="badge bull">ELON</span></td>
+            <td><span class="badge solid bull">SELL PUTS</span></td>
+            <td class="num"><span class="col-marker x">X</span></td>
+            <td class="num mono">38.62</td>
+            <td class="num mono text-ink">$149.35</td>
+          </tr>
+          <tr>
+            <td class="mono text-ink-3">7m ago</td>
+            <td class="ticker"><span class="tag-star">★</span> COIN</td>
+            <td><span class="badge bull">ELON</span></td>
+            <td><span class="badge solid bull">SELL PUTS</span></td>
+            <td class="num"><span class="col-marker x">X</span></td>
+            <td class="num mono">42.17</td>
+            <td class="num mono text-ink">$244.61</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Inputs</div></div>
+    <div class="card">
+      <div class="row-3" style="flex-wrap: wrap; gap: 12px;">
+        <div class="search-input">
+          <span class="search-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
+          </span>
+          <input class="input" type="search" placeholder="Search ticker…" />
+        </div>
+        <select class="select">
+          <option>All sectors</option>
+          <option>Information Technology</option>
+          <option>Financial Services</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Skeleton loader</div></div>
+    <div class="card stack-2">
+      <div class="skeleton" style="height:14px; width:40%;"></div>
+      <div class="skeleton" style="height:34px; width:70%;"></div>
+      <div class="skeleton" style="height:12px; width:55%;"></div>
+    </div>
+  </section>
+
+  <div style="height: 40px;"></div>
+</div>
+{% endblock %}

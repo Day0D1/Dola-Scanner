@@ -1,0 +1,184 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Universe{% endblock %}
+{% block page_name %}Universe{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Universe</h1>
+    <div class="page-subtitle">Every ticker the scanner watches — merged S&amp;P 500 + Major Watchlist + IBD 50</div>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <div class="grid g-3">
+    <div class="card">
+      <div class="card-label">Total tickers</div>
+      <div class="card-value mono" id="totalStat">–</div>
+      <div class="card-sub text-ink-3">Deduped union of all sources</div>
+    </div>
+    <div class="card" style="display: grid; grid-template-columns: 140px 1fr; gap: var(--sp-4); align-items: center;">
+      <div id="donutHost" style="width: 140px; height: 140px;"></div>
+      <div class="stack-2" id="donutLegend"></div>
+    </div>
+    <div class="card stack-2">
+      <div class="card-label">Overlaps</div>
+      <div class="row-flex row-between"><span class="text-ink-2">In two lists</span><span class="mono text-ink" id="inTwo">–</span></div>
+      <div class="row-flex row-between"><span class="text-ink-2">In all three</span><span class="mono text-ink" id="inThree">–</span></div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">A ticker in multiple lists gets stacked badges (e.g. <span class="tag-star">★</span><span class="tag-fire">🔥</span>).</div>
+    </div>
+  </div>
+
+  <section>
+    <div class="section-head">
+      <div class="section-title">All tickers <span class="count" id="allCount"></span></div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">Filter by list membership or sector</div>
+    </div>
+
+    <div class="card" style="padding: var(--sp-3); margin-bottom: var(--sp-3);">
+      <div class="row-3" style="flex-wrap: wrap; gap: var(--sp-3);">
+        <div class="search-input">
+          <span class="search-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
+          </span>
+          <input id="univSearch" class="input" type="search" placeholder="Filter ticker…" style="width: 220px;" />
+        </div>
+        <div class="chip-row" data-group="member">
+          <button class="chip active" data-member="ALL">All</button>
+          <button class="chip" data-member="SP500">S&amp;P 500</button>
+          <button class="chip" data-member="MAJOR"><span class="tag-star">★</span> Major</button>
+          <button class="chip" data-member="IBD50"><span class="tag-fire">🔥</span> IBD 50</button>
+          <button class="chip" data-member="MULTI">Multi-list</button>
+        </div>
+        <select id="univSector" class="select" style="min-width: 160px;">
+          <option value="ALL">All sectors</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="table" id="univTable">
+        <thead><tr>
+          <th>Ticker</th>
+          <th>Sector</th>
+          <th class="num">Lists</th>
+        </tr></thead>
+        <tbody id="univBody"><tr><td colspan="3" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $, $$ } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { tickerCell, majorTag, ibdTag } from "/static/v2/components.js?v={{ asset_v }}";
+
+  const state = {
+    all: [],
+    filter: { query: "", member: "ALL", sector: "ALL" },
+  };
+
+  function renderDonut(summary) {
+    // Simple SVG donut using 3 arc segments proportional to sp500/major/ibd50 counts.
+    const host = $("donutHost");
+    const total = (summary.sp500 || 0) + (summary.major || 0) + (summary.ibd50 || 0);
+    if (!total) { host.innerHTML = ""; return; }
+    const parts = [
+      { label: "S&P 500", n: summary.sp500 || 0, color: "var(--accent)" },
+      { label: "Major",   n: summary.major || 0, color: "var(--gold)" },
+      { label: "IBD 50",  n: summary.ibd50 || 0, color: "var(--fire)" },
+    ];
+    const cx = 70, cy = 70, r = 52, stroke = 14;
+    const circ = 2 * Math.PI * r;
+    let offset = 0;
+    const arcs = parts.map((p) => {
+      const dash = (p.n / total) * circ;
+      const gap = circ - dash;
+      const arc = `<circle cx="${cx}" cy="${cy}" r="${r}" stroke="${p.color}" stroke-width="${stroke}" fill="none" stroke-dasharray="${dash} ${gap}" stroke-dashoffset="${-offset}" style="transition: all 0.4s ease;" />`;
+      offset += dash;
+      return arc;
+    }).join("");
+    host.innerHTML = `<svg viewBox="0 0 140 140" width="140" height="140" style="transform: rotate(-90deg);">
+      <circle cx="${cx}" cy="${cy}" r="${r}" stroke="var(--panel-2)" stroke-width="${stroke}" fill="none"/>
+      ${arcs}
+    </svg>`;
+
+    // Legend
+    const legend = $("donutLegend");
+    legend.replaceChildren(...parts.map((p) => el(
+      "div", { class: "row-flex row-between" },
+      el("div", { class: "row-2" },
+        el("span", { style: { width: "10px", height: "10px", borderRadius: "2px", background: p.color, display: "inline-block" } }),
+        el("span", { class: "text-ink-2", style: { fontSize: "var(--fs-sm)" } }, p.label),
+      ),
+      el("span", { class: "mono text-ink" }, String(p.n)),
+    )));
+  }
+
+  function passes(t) {
+    const f = state.filter;
+    if (f.query && !t.ticker.toUpperCase().includes(f.query.toUpperCase())) return false;
+    if (f.member === "SP500" && !t.on_sp500) return false;
+    if (f.member === "MAJOR" && !t.on_major) return false;
+    if (f.member === "IBD50" && !t.on_ibd50) return false;
+    if (f.member === "MULTI" && ((t.on_sp500 ? 1 : 0) + (t.on_major ? 1 : 0) + (t.on_ibd50 ? 1 : 0)) < 2) return false;
+    if (f.sector !== "ALL" && t.sector !== f.sector) return false;
+    return true;
+  }
+
+  function render() {
+    const rows = state.all.filter(passes).sort((a, b) => a.ticker.localeCompare(b.ticker));
+    const body = $("univBody");
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="3" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">No tickers.</td></tr>';
+    } else {
+      body.replaceChildren(...rows.map((t) => {
+        const badges = [];
+        if (t.on_sp500) badges.push(el("span", { class: "badge accent" }, "S&P"));
+        if (t.on_major) badges.push(majorTag());
+        if (t.on_ibd50) badges.push(ibdTag());
+        return el(
+          "tr",
+          { onclick: () => window.location.href = `/v2/charts/${t.ticker}`, style: { cursor: "pointer" } },
+          el("td", { class: "ticker mono", style: { fontWeight: 700 } }, t.ticker),
+          el("td", { class: "text-ink-3", style: { fontSize: "var(--fs-xs)" } }, t.sector || "–"),
+          el("td", { class: "num row-2", style: { justifyContent: "flex-end", gap: "6px" } }, ...badges),
+        );
+      }));
+    }
+    $("allCount").textContent = `(${rows.length} / ${state.all.length})`;
+  }
+
+  async function loadAll() {
+    try {
+      const [summary, tickers] = await Promise.all([api.universeSummary(), fetch("/api/universe/tickers").then((r) => r.json())]);
+      $("totalStat").textContent = String(summary.total || 0);
+      $("inTwo").textContent = String(summary.overlaps?.in_two || 0);
+      $("inThree").textContent = String(summary.overlaps?.in_three || 0);
+      renderDonut(summary);
+      state.all = tickers.tickers || [];
+      // Populate sector select from data
+      const sectors = Array.from(new Set(state.all.map((t) => t.sector).filter(Boolean))).sort();
+      const sel = $("univSector");
+      sel.innerHTML = '<option value="ALL">All sectors</option>' + sectors.map((s) => `<option value="${s}">${s}</option>`).join("");
+      render();
+    } catch (e) {
+      $("univBody").innerHTML = `<tr><td colspan="3" style="padding: var(--sp-6); text-align:center; color: var(--bear);">Load failed: ${e.message}</td></tr>`;
+    }
+  }
+
+  $("univSearch").addEventListener("input", (e) => { state.filter.query = e.target.value.trim(); render(); });
+  $("univSector").addEventListener("change", (e) => { state.filter.sector = e.target.value; render(); });
+  $$("[data-group=\"member\"] .chip").forEach((c) => c.addEventListener("click", () => {
+    state.filter.member = c.dataset.member;
+    $$("[data-group=\"member\"] .chip").forEach((x) => x.classList.toggle("active", x.dataset.member === c.dataset.member));
+    render();
+  }));
+
+  loadAll();
+</script>
+{% endblock %}

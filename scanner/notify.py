@@ -10,6 +10,7 @@ import requests
 from scanner import config
 from scanner.breadth import BreadthReading
 from scanner.signals import StockSignal  # noqa: F401
+from scanner.strike import compute_strike
 
 
 TELEGRAM_API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
@@ -93,7 +94,11 @@ def format_scan_summary(
         for s in entries:
             arrow = "sell puts" if s.entry_trigger == "SELL_PUTS" else "sell calls"
             tag = "  <b>[NEW]</b>" if s.ticker in fresh_entries else "  <i>(already alerted)</i>"
-            lines.append(f"  {star(s.ticker)}<b>{s.ticker}</b>  ${s.last_close:.2f}  --&gt;  <b>{arrow}</b>{tag}")
+            strike = compute_strike(s.last_close, s.entry_trigger)
+            strike_str = f"  @ strike <b>${strike:g}</b>" if strike is not None else ""
+            lines.append(
+                f"  {star(s.ticker)}<b>{s.ticker}</b>  ${s.last_close:.2f}  --&gt;  <b>{arrow}</b>{strike_str}{tag}"
+            )
             lines.append(
                 f"    RSI now <b>{s.rsi:.1f}</b>  |  P&amp;F {s.pnf_column}  |  "
                 f"BB[{s.bb_lower:.2f} / {s.bb_middle:.2f} / {s.bb_upper:.2f}]"

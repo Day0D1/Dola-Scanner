@@ -1,0 +1,246 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — {{ page_title }}{% endblock %}
+{% block page_name %}Chart · {{ ticker }}{% endblock %}
+
+{% block head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title mono">{{ ticker }}</h1>
+    <div class="page-subtitle row-2" id="quoteLine">
+      <span class="mono text-ink" id="quotePrice" style="font-size: var(--fs-lg); font-weight: 700;">–</span>
+      <span class="mono" id="quoteChange">–</span>
+      <span class="text-ink-3">·</span>
+      <span class="text-ink-3" id="quoteBadges"></span>
+    </div>
+  </div>
+  <div class="page-actions">
+    <div class="chip-row" id="tfChips">
+      <button class="chip" data-tf="1M">1M</button>
+      <button class="chip active" data-tf="3M">3M</button>
+      <button class="chip" data-tf="6M">6M</button>
+      <button class="chip" data-tf="9M">9M</button>
+      <button class="chip" data-tf="1Y">1Y</button>
+      <button class="chip" data-tf="2Y">2Y</button>
+      <button class="chip" data-tf="ALL">All</button>
+    </div>
+    <a href="/v2/time-series/{{ ticker }}" class="btn ghost">Time Series</a>
+    <a href="/v2/scanner" class="btn ghost">Scanner</a>
+  </div>
+</div>
+
+<div class="stack-4">
+
+  <!-- Primary candlestick + BB + RSI subplot -->
+  <div class="card" style="padding: var(--sp-3);">
+    <div class="row-flex row-between" style="margin-bottom: var(--sp-2);">
+      <div class="section-title">Price · Bollinger · RSI</div>
+      <div class="row-3 text-ink-3" style="font-size: var(--fs-xs);">
+        <span class="row-2"><span class="col-marker x" style="width:14px;height:14px;font-size:9px;">X</span> P&F X = bullish</span>
+        <span class="row-2"><span class="col-marker o" style="width:14px;height:14px;font-size:9px;">O</span> P&F O = bearish</span>
+        <span class="row-2"><span style="width:8px;height:8px;background:var(--warn);border-radius:50%;display:inline-block;"></span> Entry marker</span>
+      </div>
+    </div>
+    <div id="candlestickChart" style="height: 520px;"></div>
+  </div>
+
+  <!-- Point & Figure -->
+  <div class="grid g-2">
+    <div class="card" style="padding: var(--sp-3);">
+      <div class="row-flex row-between" style="margin-bottom: var(--sp-2);">
+        <div class="section-title">Point &amp; Figure — Close</div>
+        <div class="mono text-ink-3" id="pnfSubtitle" style="font-size: var(--fs-xs);">–</div>
+      </div>
+      <div id="pnfChart" style="overflow-x: auto; overflow-y: hidden;"></div>
+    </div>
+    <div class="card" style="padding: var(--sp-3);">
+      <div class="row-flex row-between" style="margin-bottom: var(--sp-2);">
+        <div class="section-title">Point &amp; Figure — Fair Value (BB mid)</div>
+        <div class="mono text-ink-3" id="pnfSubtitleFV" style="font-size: var(--fs-xs);">–</div>
+      </div>
+      <div id="pnfChartFV" style="overflow-x: auto; overflow-y: hidden;"></div>
+    </div>
+  </div>
+
+  <!-- Signal snapshot -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom: var(--sp-3);">Current signal</div>
+    <div id="signalSnap" class="grid g-4">
+      <div class="skeleton" style="height:44px; width:80%;"></div>
+      <div class="skeleton" style="height:44px; width:80%;"></div>
+      <div class="skeleton" style="height:44px; width:80%;"></div>
+      <div class="skeleton" style="height:44px; width:80%;"></div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $, $$, signClass } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { setupBadge, actionBadge, colMarker, majorTag, ibdTag, badge } from "/static/v2/components.js?v={{ asset_v }}";
+  import { renderCandlestick, renderPnF, renderLine } from "/static/v2/charts.js?v={{ asset_v }}";
+
+  const T = "{{ ticker }}";
+  const IS_INDEX = ["SPX", "VIX", "BPNYA"].includes(T);
+  let currentTf = "3M";
+  let scanSignal = null;   // populated once /api/scan lands
+
+  async function loadChart(tf = currentTf) {
+    currentTf = tf;
+    try {
+      // Indices (SPX / VIX / BPNYA) live at /api/index/{key}; everything else
+      // is a stock at /api/stock/{ticker}. Same response shape either way.
+      const path = IS_INDEX
+        ? `/api/index/${encodeURIComponent(T)}?timeframe=${encodeURIComponent(tf)}`
+        : `/api/stock/${encodeURIComponent(T)}?timeframe=${encodeURIComponent(tf)}`;
+      const r = await fetch(path);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+
+      // Header quote — format per instrument.
+      //   Stocks + SPX:  $1,234.56
+      //   VIX:           14.73  (unitless volatility index)
+      //   BPNYA:         49.87%  (self-computed breadth percentage)
+      const priceFmt = (v) => {
+        if (v == null) return "–";
+        if (T === "BPNYA") return Number(v).toFixed(2) + "%";
+        if (T === "VIX")   return Number(v).toFixed(2);
+        return fmt.price(v);
+      };
+      const last = data.candles?.[data.candles.length - 1];
+      if (last) {
+        $("quotePrice").textContent = priceFmt(last.close);
+        const prev = data.candles.length > 1 ? data.candles[data.candles.length - 2].close : null;
+        if (prev != null) {
+          const chg = last.close - prev;
+          const pct = (chg / prev) * 100;
+          const el2 = $("quoteChange");
+          const chgStr = T === "BPNYA"
+            ? `${fmt.change(chg)}% (${fmt.pct(pct, 2)})`
+            : `${fmt.change(chg)} (${fmt.pct(pct, 2)})`;
+          el2.textContent = chgStr;
+          el2.className = "mono " + signClass(chg);
+        }
+      }
+
+      // Event markers from historical entry_alerts (filter by ticker, date within view)
+      const events = await buildEventMarkers(data.candles);
+
+      // Charts
+      renderCandlestick("candlestickChart", data.candles, data.settings, { events });
+      renderPnF("pnfChart",   data.pnf,             data.pnf_box, data.pnf_type);
+      renderPnF("pnfChartFV", data.pnf_fair_value,  data.pnf_box, data.pnf_type);
+      $("pnfSubtitle").textContent   = `${data.pnf_type === "traditional" ? data.pnf_box + "-pt" : data.pnf_box + "%"} box · ${data.pnf_reversal}-box reversal · close`;
+      $("pnfSubtitleFV").textContent = `${data.pnf_type === "traditional" ? data.pnf_box + "-pt" : data.pnf_box + "%"} box · ${data.pnf_reversal}-box reversal · BB middle`;
+    } catch (e) {
+      document.getElementById("candlestickChart").innerHTML =
+        `<div style="padding: var(--sp-6); color: var(--bear); text-align:center;">Load failed: ${e.message}</div>`;
+    }
+  }
+
+  async function buildEventMarkers(candles) {
+    if (!candles?.length) return [];
+    const first = candles[0].date, last = candles[candles.length - 1].date;
+    try {
+      const feed = await api.recentEntries(500);
+      return (feed.entries || [])
+        .filter((e) => e.ticker === T && e.fired_at)
+        .map((e) => ({
+          date: e.fired_at.slice(0, 10),
+          price: e.trigger_price,
+          kind: "ENTRY",
+          label: e.direction === "SELL_PUTS" ? "ENTRY · Sell puts" : "ENTRY · Sell calls",
+        }))
+        .filter((e) => e.date >= first && e.date <= last && e.price != null);
+    } catch { return []; }
+  }
+
+  async function loadSignal(retries = 8) {
+    // Indices don't participate in the scan universe — their "signal snapshot"
+    // is best pulled from the breadth reading itself.
+    if (IS_INDEX) {
+      $("quoteBadges").innerHTML = "Market breadth index";
+      try {
+        const scan = await api.scan();
+        // Retry while the startup scan is still populating the cache.
+        if (scan.status === "loading" && retries > 0) {
+          setTimeout(() => loadSignal(retries - 1), 2000);
+          return;
+        }
+        const b = scan.breadth || {};
+        const pillar = T === "SPX" ? b.spx : T === "VIX" ? b.vix : b.bpnya;
+        if (!pillar || pillar.column == null) {
+          $("signalSnap").innerHTML = '<div class="text-ink-3">Breadth data not yet computed for this index.</div>';
+          return;
+        }
+        const host = $("signalSnap");
+        const colColor = pillar.column === "X" ? "var(--bull)" : "var(--bear)";
+        host.replaceChildren(
+          cell("P&F column", colMarker(pillar.column)),
+          cell("Signal", el("span", { class: "mono", style: { fontSize: "var(--fs-lg)", fontWeight: 700, color: colColor } }, pillar.signal || "–")),
+          cell("Level", el("span", { class: "mono text-ink" }, pillar.level == null ? "–" : (T === "BPNYA" ? Number(pillar.level).toFixed(2) + "%" : Number(pillar.level).toFixed(2)))),
+          cell(T === "SPX" ? "Column boxes" : "Day change",
+            el("span", { class: `mono ${signClass(pillar.change)}` }, pillar.change == null ? "–" : (T === "SPX" ? fmt.boxes(pillar.change) + " boxes" : fmt.change(pillar.change)))),
+        );
+      } catch (e) {
+        console.warn("[chart_detail] loadSignal index err:", e);
+        $("signalSnap").innerHTML = `<div class="text-bear">Load failed: ${e.message}</div>`;
+      }
+      return;
+    }
+    try {
+      const scan = await api.scan();
+      if (scan.status === "loading" && retries > 0) {
+        setTimeout(() => loadSignal(retries - 1), 2000);
+        return;
+      }
+      const s = (scan.signals || []).find((x) => x.ticker === T);
+      scanSignal = s || null;
+      const host = $("signalSnap");
+      if (!s) { host.innerHTML = '<div class="text-ink-3">Ticker not in current scan universe.</div>'; return; }
+
+      // Badges next to ticker (top-of-page)
+      const badgesHost = $("quoteBadges");
+      const badges = [];
+      if (s.on_watchlist) badges.push('<span class="tag-star">★</span> Major');
+      if (s.on_ibd50)     badges.push('<span class="tag-fire">🔥</span> IBD 50');
+      if (s.sector)       badges.push(s.sector);
+      badgesHost.innerHTML = badges.join(" · ");
+
+      host.replaceChildren(
+        cell("Setup", s.candidate ? setupBadge(s.candidate) : el("span", { class: "text-ink-4" }, "None")),
+        cell("Action", s.entry_trigger ? actionBadge(s.entry_trigger) : el("span", { class: "text-ink-4" }, "Wait")),
+        cell("P&F column", colMarker(s.pnf_column)),
+        cell("RSI(10)", el("span", { class: "mono", style: { fontSize: "var(--fs-lg)", fontWeight: 700, color: s.rsi < 30 ? "var(--bull)" : (s.rsi > 70 ? "var(--bear)" : "var(--ink)") } }, fmt.num(s.rsi, 1))),
+        cell("BB upper", el("span", { class: "mono text-ink" }, fmt.num(s.bb_upper, 2))),
+        cell("BB middle", el("span", { class: "mono text-ink" }, fmt.num(s.bb_middle, 2))),
+        cell("BB lower", el("span", { class: "mono text-ink" }, fmt.num(s.bb_lower, 2))),
+        cell("Last close", el("span", { class: "mono text-ink" }, fmt.price(s.last_close))),
+      );
+    } catch (e) { console.warn(e); }
+  }
+
+  function cell(label, valueEl) {
+    return el("div", { class: "stack-1" },
+      el("div", { class: "card-label" }, label),
+      el("div", { style: { fontSize: "var(--fs-lg)" } }, valueEl),
+    );
+  }
+
+  // Timeframe chip wiring
+  $$("#tfChips .chip").forEach((c) => c.addEventListener("click", () => {
+    $$("#tfChips .chip").forEach((x) => x.classList.remove("active"));
+    c.classList.add("active");
+    loadChart(c.dataset.tf);
+  }));
+
+  loadChart("3M");
+  loadSignal();
+  setInterval(loadSignal, 30_000);
+</script>
+{% endblock %}

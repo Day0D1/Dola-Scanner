@@ -1,0 +1,193 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Alerts{% endblock %}
+{% block page_name %}Alerts{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Alerts</h1>
+    <div class="page-subtitle">Live entries, active candidates, and every ENTER NOW that ever fired</div>
+  </div>
+  <div class="page-actions">
+    <a href="/api/performance.csv" class="btn ghost">CSV</a>
+    <a href="/api/performance.xlsx" class="btn">Excel</a>
+    <a href="/performance" class="btn ghost">Perf tracker</a>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <section>
+    <div class="section-head">
+      <div class="section-title">Enter now <span class="count" id="enterCount"></span></div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">Candidate + P&amp;F aligned — pull the trigger</div>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="enterTable">
+        <thead><tr>
+          <th>Ticker</th><th>Setup</th><th>Action</th>
+          <th class="num">Strike</th>
+          <th class="num">P&amp;F</th><th class="num">RSI</th>
+          <th class="num">Price</th><th class="num">BB Range</th>
+        </tr></thead>
+        <tbody id="enterBody"><tr><td colspan="7" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="section-title">Active candidates <span class="count" id="candCount"></span></div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">Setup active in the last 60 days — waiting for P&amp;F flip</div>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="candTable">
+        <thead><tr>
+          <th>Ticker</th><th>Setup</th>
+          <th class="num">RSI</th><th class="num">P&amp;F</th>
+          <th>Waiting for</th><th class="num">Price</th>
+        </tr></thead>
+        <tbody id="candBody"><tr><td colspan="6" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="section-title">Historical alerts <span class="count" id="histCount"></span></div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">Every ENTER NOW ever fired · newest first</div>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="histTable">
+        <thead><tr>
+          <th style="width: 130px;">Fired</th>
+          <th>Ticker</th>
+          <th>Direction</th>
+          <th class="num">Trigger price</th>
+          <th class="num">Strike</th>
+          <th class="num">Now</th>
+          <th class="num">Change</th>
+        </tr></thead>
+        <tbody id="histBody"><tr><td colspan="6" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $, signClass } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { tickerCell, setupBadge, actionBadge, colMarker } from "/static/v2/components.js?v={{ asset_v }}";
+
+  async function loadLive(retries = 8) {
+    try {
+      const s = await api.scan();
+      if (s.status === "loading" && retries > 0) { setTimeout(() => loadLive(retries - 1), 2000); return; }
+      const sigs = s.signals || [];
+      const entries = sigs.filter((x) => x.entry_trigger);
+      const cands = sigs.filter((x) => x.candidate && !x.entry_trigger);
+
+      $("enterCount").textContent = entries.length ? `(${entries.length})` : "";
+      $("candCount").textContent = cands.length ? `(${cands.length})` : "";
+
+      // Entries table
+      const enterBody = $("enterBody");
+      if (!entries.length) {
+        enterBody.innerHTML = '<tr><td colspan="7" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">No live entries right now.</td></tr>';
+      } else {
+        enterBody.replaceChildren(...entries.map((s) => {
+          // Strike = 15% from current close, rounded to nearest $5.
+          // SELL_PUTS: below; SELL_CALLS: above. Matches scanner/strike.py.
+          const price = s.last_close;
+          const strike = (price && s.entry_trigger === "SELL_PUTS")
+            ? Math.floor(price * 0.85 / 5) * 5
+            : (price && s.entry_trigger === "SELL_CALLS")
+              ? Math.ceil(price * 1.15 / 5) * 5
+              : null;
+          return el(
+            "tr",
+            { onclick: () => window.location.href = `/v2/charts/${s.ticker}`, style: { cursor: "pointer" } },
+            el("td", { class: "ticker" }, tickerCell(s)),
+            el("td", {}, setupBadge(s.candidate)),
+            el("td", {}, actionBadge(s.entry_trigger)),
+            el("td", { class: "num mono text-warn", style: { fontWeight: 700 } }, strike == null ? "–" : `$${strike}`),
+            el("td", { class: "num" }, colMarker(s.pnf_column)),
+            el("td", { class: "num mono" }, fmt.num(s.rsi, 1)),
+            el("td", { class: "num mono text-ink" }, fmt.price(s.last_close)),
+            el("td", { class: "num mono text-ink-3", style: { fontSize: "var(--fs-xs)" } },
+              `${fmt.num(s.bb_lower, 2)} / ${fmt.num(s.bb_upper, 2)}`),
+          );
+        }));
+      }
+
+      // Candidates table
+      const candBody = $("candBody");
+      if (!cands.length) {
+        candBody.innerHTML = '<tr><td colspan="6" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">No active candidates.</td></tr>';
+      } else {
+        candBody.replaceChildren(...cands.map((c) => {
+          const need = c.candidate === "ELON" ? "P&F flip → X" : "P&F flip → O";
+          return el(
+            "tr",
+            { onclick: () => window.location.href = `/v2/charts/${c.ticker}`, style: { cursor: "pointer" } },
+            el("td", { class: "ticker" }, tickerCell(c)),
+            el("td", {}, setupBadge(c.candidate)),
+            el("td", { class: "num mono" }, fmt.num(c.rsi, 1)),
+            el("td", { class: "num" }, colMarker(c.pnf_column)),
+            el("td", { class: "text-ink-3 mono", style: { fontSize: "var(--fs-xs)" } }, need),
+            el("td", { class: "num mono text-ink" }, fmt.price(c.last_close)),
+          );
+        }));
+      }
+    } catch (e) { console.warn("live load failed", e); }
+  }
+
+  async function loadHistorical() {
+    try {
+      const [recentData, scan] = await Promise.all([api.recentEntries(500), api.scan()]);
+      const nowByTicker = {};
+      for (const s of (scan.signals || [])) nowByTicker[s.ticker] = s.last_close;
+      const rows = recentData.entries || [];
+      $("histCount").textContent = rows.length ? `(${rows.length})` : "";
+      const body = $("histBody");
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="6" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">No historical alerts yet.</td></tr>';
+        return;
+      }
+      body.replaceChildren(...rows.map((r) => {
+        const nowPx = nowByTicker[r.ticker];
+        const trig = r.trigger_price;
+        const chg = (nowPx != null && trig != null) ? (nowPx - trig) : null;
+        const chgPct = (nowPx != null && trig != null && trig !== 0) ? ((nowPx - trig) / trig * 100) : null;
+        // Favorability: SELL_PUTS wants price up, SELL_CALLS wants price down
+        let chgCls = "text-ink-3";
+        if (chg != null) {
+          const favorable = (r.direction === "SELL_PUTS" && chg > 0) || (r.direction === "SELL_CALLS" && chg < 0);
+          chgCls = favorable ? "text-bull" : (chg === 0 ? "text-ink-3" : "text-bear");
+        }
+        const strikeTxt = r.strike_price == null ? "–" : `$${Number(r.strike_price).toFixed(0)}`;
+        return el(
+          "tr",
+          { onclick: () => window.location.href = `/v2/charts/${r.ticker}`, style: { cursor: "pointer" } },
+          el("td", { class: "mono text-ink-3", style: { fontSize: "var(--fs-xs)" } }, fmt.timeAgo(r.fired_at)),
+          el("td", { class: "ticker" }, tickerCell(r)),
+          el("td", {}, actionBadge(r.direction)),
+          el("td", { class: "num mono text-ink-2" }, fmt.price(trig)),
+          el("td", { class: "num mono text-warn", style: { fontWeight: 700 } }, strikeTxt),
+          el("td", { class: "num mono text-ink" }, nowPx == null ? "–" : fmt.price(nowPx)),
+          el("td", { class: `num mono ${chgCls}` },
+            chgPct == null ? "–" : `${fmt.change(chg)} (${fmt.pct(chgPct, 1)})`),
+        );
+      }));
+    } catch (e) {
+      $("histBody").innerHTML = `<tr><td colspan="6" style="padding: var(--sp-6); text-align:center; color: var(--bear);">Load failed: ${e.message}</td></tr>`;
+    }
+  }
+
+  loadLive();
+  loadHistorical();
+  setInterval(loadLive, 30_000);
+</script>
+{% endblock %}

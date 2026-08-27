@@ -1,0 +1,130 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Watchlists{% endblock %}
+{% block page_name %}Watchlists{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Watchlists</h1>
+    <div class="page-subtitle">Priority tickers with current market state — click any row for chart</div>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <section>
+    <div class="section-head">
+      <div class="section-title"><span class="tag-star">★</span> Major Watchlist <span class="count" id="majorCount"></span></div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">Your priority stocks · locked in <code>scanner/config.py::MAJOR_WATCHLIST</code></div>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="majorTable">
+        <thead>
+          <tr>
+            <th>Ticker</th><th>Setup</th>
+            <th class="num">RSI</th><th class="num">P&amp;F</th>
+            <th class="num">Price</th><th>Sector</th>
+            <th class="num">Signal</th>
+          </tr>
+        </thead>
+        <tbody id="majorBody"><tr><td colspan="7" style="padding: var(--sp-5); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="section-title"><span class="tag-fire">🔥</span> IBD 50 <span class="count" id="ibdCount"></span></div>
+      <div class="text-ink-3 row-2" style="font-size: var(--fs-xs);">
+        <span>Investor's Business Daily top-50 · weekly refresh Mondays 8 AM ET</span>
+        <span id="ibdAsOf" class="mono text-ink-3" style="margin-left: var(--sp-2);"></span>
+        <button id="ibdRefresh" class="btn ghost xs" style="margin-left: var(--sp-2);">Refresh now</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="ibdTable">
+        <thead>
+          <tr>
+            <th>Ticker</th><th>Setup</th>
+            <th class="num">RSI</th><th class="num">P&amp;F</th>
+            <th class="num">Price</th><th>Sector</th>
+            <th class="num">Signal</th>
+          </tr>
+        </thead>
+        <tbody id="ibdBody"><tr><td colspan="7" style="padding: var(--sp-5); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $ } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { tickerCell, setupBadge, colMarker, badge } from "/static/v2/components.js?v={{ asset_v }}";
+
+  function fillTable(bodyId, sigs) {
+    const body = $(bodyId);
+    if (!sigs.length) {
+      body.innerHTML = '<tr><td colspan="7" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">No tickers.</td></tr>';
+      return;
+    }
+    const rank = (s) => s.entry_trigger ? 0 : (s.candidate ? 1 : 2);
+    const sorted = [...sigs].sort((a, b) => {
+      const r = rank(a) - rank(b);
+      return r !== 0 ? r : a.ticker.localeCompare(b.ticker);
+    });
+    body.replaceChildren(...sorted.map((s) => el(
+      "tr",
+      { onclick: () => window.location.href = `/v2/charts/${s.ticker}`, style: { cursor: "pointer" } },
+      el("td", { class: "ticker" }, tickerCell(s)),
+      el("td", {}, s.candidate ? setupBadge(s.candidate) : el("span", { class: "text-ink-4" }, "–")),
+      el("td", { class: "num mono" }, fmt.num(s.rsi, 1)),
+      el("td", { class: "num" }, colMarker(s.pnf_column)),
+      el("td", { class: "num mono text-ink" }, fmt.price(s.last_close)),
+      el("td", { class: "text-ink-3", style: { fontSize: "var(--fs-xs)" } }, s.sector || "–"),
+      el("td", { class: "num" },
+        s.entry_trigger ? badge("ENTER", "solid-bull") :
+        s.candidate ? badge("WAITING", "warn") :
+        el("span", { class: "text-ink-4" }, "—")),
+    )));
+  }
+
+  async function loadAll(retries = 8) {
+    try {
+      const [scan, ibdMeta] = await Promise.all([api.scan(), api.ibd50()]);
+      if (scan.status === "loading" && retries > 0) { setTimeout(() => loadAll(retries - 1), 2000); return; }
+      const sigs = scan.signals || [];
+      const majors = sigs.filter((s) => s.on_watchlist);
+      const ibd = sigs.filter((s) => s.on_ibd50);
+      $("majorCount").textContent = `(${majors.length})`;
+      $("ibdCount").textContent = `(${ibd.length})`;
+      fillTable("majorBody", majors);
+      fillTable("ibdBody", ibd);
+      if (ibdMeta?.status === "ok") {
+        $("ibdAsOf").textContent = `· ${ibdMeta.count} tickers · as of ${ibdMeta.as_of_date || "?"}`;
+      }
+    } catch (e) { console.warn("watchlists load failed", e); }
+  }
+
+  $("ibdRefresh").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = "Refreshing…";
+    try {
+      const res = await api.ibd50Refresh();
+      if (res?.status === "refreshed") {
+        $("ibdAsOf").textContent = `· ${res.count} tickers · as of ${res.as_of_date} (updated)`;
+        api.refresh(false).catch(() => {});
+      } else if (res?.status === "cached") {
+        $("ibdAsOf").textContent = `· ${res.count} tickers · as of ${res.as_of_date} (already current)`;
+      }
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  });
+
+  loadAll();
+  setInterval(loadAll, 30_000);
+</script>
+{% endblock %}

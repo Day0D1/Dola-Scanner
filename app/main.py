@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,6 +26,7 @@ from scanner import config, data, ibd50, indicators, store, universe
 from scanner.breadth import read_breadth
 from scanner.notify import send_scan_summary
 from scanner.signals import StockSignal, evaluate_stock
+from scanner.strike import compute_strike
 
 
 IBD50_WATCHLIST_NAME = "ibd50"
@@ -138,8 +139,15 @@ def _refresh_ibd50(force: bool = False) -> dict:
         snap.tickers,
         source_url=snap.source_url,
         as_of_date=snap.as_of_date,
-        meta={"raw_count": snap.raw_count, "fetched_at": snap.fetched_at},
+        meta={
+            "raw_count": snap.raw_count,
+            "fetched_at": snap.fetched_at,
+            "sectors": snap.sectors or {},
+        },
     )
+    # Invalidate the cached sector map so the new IBD sectors get merged in.
+    global _TICKER_TO_SECTOR
+    _TICKER_TO_SECTOR = None
     print(f"[ibd50] refreshed: {len(snap.tickers)} tickers as of {snap.as_of_date}")
     return {
         "status": "refreshed",
@@ -356,12 +364,28 @@ _TICKER_TO_SECTOR: Optional[dict] = None
 
 
 def _get_ticker_to_sector() -> dict:
+    """Merged sector map: S&P 500 GICS sectors + IBD 50 sectors from CapForce.
+    Overlapping tickers keep the S&P GICS label (preferred). Missing IBD tickers
+    fall back to CapForce's less-formal sector label so the UI never shows
+    "Unknown" for a ticker whose sector is available anywhere.
+    """
     global _TICKER_TO_SECTOR
-    if _TICKER_TO_SECTOR is None:
-        try:
-            _TICKER_TO_SECTOR = universe.get_ticker_to_sector()
-        except Exception:
-            _TICKER_TO_SECTOR = {}
+    if _TICKER_TO_SECTOR is not None:
+        return _TICKER_TO_SECTOR
+    try:
+        sp = universe.get_ticker_to_sector()
+    except Exception:
+        sp = {}
+    merged = {}
+    # Start with IBD 50 sectors (weaker labels), then overlay S&P GICS.
+    try:
+        row = store.get_watchlist(IBD50_WATCHLIST_NAME)
+        if row and row.get("meta") and isinstance(row["meta"].get("sectors"), dict):
+            merged.update(row["meta"]["sectors"])
+    except Exception:
+        pass
+    merged.update(sp)
+    _TICKER_TO_SECTOR = merged
     return _TICKER_TO_SECTOR
 
 
@@ -627,11 +651,14 @@ _INDEX_KEYS = {
 
 
 def _bpnya_series_as_ohlc() -> pd.DataFrame:
-    history = store.get_bpnya_history()
+    """Now returns REAL OHLC when the row has open/high/low; falls back to
+    open=high=low=close for older rows that only stored the close pct.
+    """
+    history = store.get_bpnya_history_ohlc()
     if not history:
         return pd.DataFrame()
     df = pd.DataFrame(
-        [(pd.Timestamp(d).date(), v, v, v, v, 0) for d, v in history],
+        [(pd.Timestamp(d).date(), o, h, l, c, 0) for d, o, h, l, c in history],
         columns=["date", "open", "high", "low", "close", "volume"],
     ).set_index("date")
     return df
@@ -746,6 +773,362 @@ def performance_page(request: Request):
     return templates.TemplateResponse(request, "performance.html")
 
 
+# ============================================================
+# v2 trading terminal — parallel redesign at /v2/*
+# Everything under /v2/ is the new UI; legacy routes untouched.
+# ============================================================
+
+def _v2_ctx(current_page: str, page_title: Optional[str] = None) -> dict:
+    """Common template context for every v2 page."""
+    return {
+        "current_page": current_page,
+        "page_title": page_title,
+        "signal_mode": config.SIGNAL_MODE,
+    }
+
+
+@app.get("/v2/", response_class=HTMLResponse)
+@app.get("/v2", response_class=HTMLResponse)
+def v2_overview(request: Request):
+    return templates.TemplateResponse(request, "v2/overview.html", _v2_ctx("overview", "Overview"))
+
+
+@app.get("/v2/dev/components", response_class=HTMLResponse)
+def v2_dev_components(request: Request):
+    return templates.TemplateResponse(request, "v2/dev_components.html", _v2_ctx("overview", "Components"))
+
+
+# --- v2 API endpoints (thin wrappers over existing state, no logic changes) ---
+
+_MARKET_STATES = {
+    "OPEN":        {"label": "Market Open",  "css_class": "open"},
+    "PRE_MARKET":  {"label": "Pre-Market",   "css_class": "pre-market"},
+    "AFTER_HOURS": {"label": "After Hours",  "css_class": "after-hours"},
+    "CLOSED":      {"label": "Market Closed","css_class": "closed"},
+}
+
+
+def _market_state_for(now_et: dt.datetime) -> str:
+    """Map an ET-local datetime to a market state string."""
+    # Weekend
+    if now_et.weekday() >= 5:
+        return "CLOSED"
+    minutes = now_et.hour * 60 + now_et.minute
+    if 4 * 60 <= minutes < 9 * 60 + 30:
+        return "PRE_MARKET"
+    if 9 * 60 + 30 <= minutes < 16 * 60:
+        return "OPEN"
+    if 16 * 60 <= minutes < 20 * 60:
+        return "AFTER_HOURS"
+    return "CLOSED"
+
+
+@app.get("/api/market/status")
+def api_market_status():
+    now_et = dt.datetime.now(ET)
+    state = _market_state_for(now_et)
+    meta = _MARKET_STATES[state]
+    return {
+        "status": state,
+        "label": meta["label"],
+        "css_class": meta["css_class"],
+        "now_et": now_et.isoformat(timespec="seconds"),
+    }
+
+
+@app.get("/api/entries/recent")
+def api_entries_recent(limit: int = 20):
+    """Recent ENTER NOW alerts joined with the current scan cache for context.
+
+    The dashboard uses this for the Latest Signals feed on the Overview page.
+    """
+    limit = max(1, min(limit, 200))
+    rows = store.get_entry_alerts_all()[:limit]
+    with _cache_lock:
+        sigs_by_ticker = {s.ticker: s for s in _cache["signals"]}
+    watch = _major_watchlist_set()
+    ibd = _ibd50_watchlist_set()
+    out = []
+    for r in rows:
+        s = sigs_by_ticker.get(r["ticker"])
+        out.append({
+            "fired_at": r["fired_at"],
+            "ticker": r["ticker"],
+            "direction": r["direction"],
+            "trigger_price": r["trigger_price"],
+            "strike_price": compute_strike(r["trigger_price"], r["direction"]),
+            "last_close": (round(s.last_close, 2) if s else None),
+            "rsi": (None if (s is None or pd.isna(s.rsi)) else round(s.rsi, 1)),
+            "pnf_column": s.pnf_column if s else None,
+            "candidate": s.candidate if s else None,
+            "on_watchlist": r["ticker"] in watch,
+            "on_ibd50": r["ticker"] in ibd,
+        })
+    return {"entries": out, "count": len(out)}
+
+
+def _v2_stub(request: Request, page: str, title: str, milestone: str, subtitle: Optional[str] = None):
+    ctx = _v2_ctx(page, title)
+    ctx["stub_milestone"] = milestone
+    ctx["stub_subtitle"] = subtitle
+    return templates.TemplateResponse(request, "v2/_stub.html", ctx)
+
+
+@app.get("/v2/scanner",     response_class=HTMLResponse)
+def v2_scanner(request: Request):
+    return templates.TemplateResponse(request, "v2/scanner.html", _v2_ctx("scanner", "Scanner"))
+@app.get("/v2/watchlists",  response_class=HTMLResponse)
+def v2_watchlists(request: Request):
+    return templates.TemplateResponse(request, "v2/watchlists.html", _v2_ctx("watchlists", "Watchlists"))
+@app.get("/v2/alerts",      response_class=HTMLResponse)
+def v2_alerts(request: Request):
+    return templates.TemplateResponse(request, "v2/alerts.html", _v2_ctx("alerts", "Alerts"))
+@app.get("/v2/universe",    response_class=HTMLResponse)
+def v2_universe(request: Request):
+    return templates.TemplateResponse(request, "v2/universe.html", _v2_ctx("universe", "Universe"))
+@app.get("/v2/settings",    response_class=HTMLResponse)
+def v2_settings(request: Request):
+    return templates.TemplateResponse(request, "v2/settings.html", _v2_ctx("settings", "Settings"))
+@app.get("/v2/charts", response_class=HTMLResponse)
+def v2_charts(request: Request):
+    return templates.TemplateResponse(request, "v2/charts.html", _v2_ctx("charts", "Charts"))
+
+@app.get("/v2/charts/{ticker}", response_class=HTMLResponse)
+def v2_charts_detail(request: Request, ticker: str):
+    ctx = _v2_ctx("charts", f"Chart · {ticker.upper()}")
+    ctx["ticker"] = ticker.upper()
+    return templates.TemplateResponse(request, "v2/chart_detail.html", ctx)
+
+@app.get("/v2/time-series", response_class=HTMLResponse)
+def v2_ts(request: Request):
+    return templates.TemplateResponse(request, "v2/time_series.html", _v2_ctx("time-series", "Time Series"))
+
+@app.get("/v2/time-series/{key}", response_class=HTMLResponse)
+def v2_ts_detail(request: Request, key: str):
+    ctx = _v2_ctx("time-series", f"Time Series · {key.upper()}")
+    ctx["ticker"] = key.upper()
+    return templates.TemplateResponse(request, "v2/time_series_detail.html", ctx)
+
+
+@app.post("/api/bpnya/day")
+async def api_bpnya_day(request: Request):
+    """Add or update a single BPNYA day. JSON body: {date, open?, high?, low?, close}.
+    Used by the daily-entry form on /v2/settings.
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"invalid JSON: {e}"}, status_code=400)
+    d_raw = payload.get("date")
+    c_raw = payload.get("close")
+    if d_raw is None or c_raw is None:
+        return JSONResponse({"error": "date and close are required"}, status_code=400)
+    try:
+        d = pd.to_datetime(d_raw, errors="raise").date().isoformat()
+        c = float(c_raw)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"could not parse date/close: {e}"}, status_code=400)
+    def _num(v):
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except Exception:
+            return None
+    o = _num(payload.get("open"))
+    h = _num(payload.get("high"))
+    l = _num(payload.get("low"))
+    try:
+        store.upsert_bpnya(d, c, universe_size=0, open_=o, high=h, low=l, source="manual")
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"upsert failed: {e}"}, status_code=500)
+    return {"status": "ok", "date": d, "close": c, "open": o, "high": h, "low": l}
+
+
+@app.get("/api/universe/tickers")
+def api_universe_tickers():
+    """Every ticker in the merged scan universe with its sector + list membership.
+
+    Used by the v2 Universe page for the searchable/filterable table.
+    """
+    try:
+        sp500 = set(universe.get_universe_tickers()) if config.USE_FULL_UNIVERSE else set(config.MVP_UNIVERSE)
+    except Exception:
+        sp500 = set(config.MVP_UNIVERSE)
+    major = set(getattr(config, "MAJOR_WATCHLIST", []) or [])
+    ibd = _ibd50_watchlist_set()
+    sector_map = _get_ticker_to_sector()
+    all_tickers = sorted(sp500 | major | ibd)
+    return {
+        "tickers": [
+            {
+                "ticker": t,
+                "sector": sector_map.get(t, ""),
+                "on_sp500": t in sp500,
+                "on_major": t in major,
+                "on_ibd50": t in ibd,
+            }
+            for t in all_tickers
+        ]
+    }
+
+
+@app.get("/api/settings")
+def api_settings():
+    """Read-only exposure of live strategy config for the v2 Settings page."""
+    return {
+        "signal_mode":              config.SIGNAL_MODE,
+        "bb_period":                config.BB_PERIOD,
+        "bb_stddev":                config.BB_STDDEV,
+        "rsi_period":               config.RSI_PERIOD,
+        "rsi_oversold":             config.RSI_OVERSOLD,
+        "rsi_overbought":           config.RSI_OVERBOUGHT,
+        "candidate_lookback_days":  getattr(config, "CANDIDATE_LOOKBACK_DAYS", 60),
+        "pnf_box_pct":              config.PNF_BOX_PCT,
+        "pnf_reversal":             config.PNF_REVERSAL,
+        "vix_pnf_box_size":         config.VIX_PNF_BOX_SIZE,
+        "vix_pnf_reversal":         config.VIX_PNF_REVERSAL,
+        "use_full_universe":        config.USE_FULL_UNIVERSE,
+        "scan_workers":             config.SCAN_WORKERS,
+        "lookback_days":            config.LOOKBACK_DAYS,
+    }
+
+
+@app.post("/api/bpnya/import")
+async def api_bpnya_import(file: Optional[UploadFile] = File(None), body: Optional[str] = None):
+    """Import historical BPNYA data (date + close pct) into bpnya_history.
+
+    Accepts either a multipart file upload OR raw CSV in the request body.
+    CSV format is flexible: needs a "Date" column and one of Close / Value /
+    Pct / BPNYA / Percent. Anything else is ignored (StockCharts exports with
+    Open/High/Low/Close are fine — we just take Close).
+
+    Upserts by date, so re-importing overlapping days silently replaces.
+    """
+    # Get the CSV text
+    if file is not None:
+        raw = (await file.read()).decode("utf-8", errors="replace")
+    elif body:
+        raw = body
+    else:
+        return JSONResponse({"error": "provide a file upload or CSV body"}, status_code=400)
+
+    from io import StringIO
+    try:
+        df = pd.read_csv(StringIO(raw))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"CSV parse failed: {e}"}, status_code=400)
+
+    # Normalize column names
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    if "date" not in df.columns:
+        return JSONResponse({"error": "CSV must include a Date column"}, status_code=400)
+
+    # Find the close column
+    close_col = None
+    for cand in ("close", "value", "pct", "bpnya", "percent", "%"):
+        if cand in df.columns:
+            close_col = cand
+            break
+    if close_col is None:
+        # Fall back to the last numeric column
+        for c in reversed(df.columns.tolist()):
+            if c == "date":
+                continue
+            try:
+                if pd.api.types.is_numeric_dtype(df[c]) or pd.to_numeric(df[c], errors="coerce").notna().any():
+                    close_col = c
+                    break
+            except Exception:
+                continue
+    if close_col is None:
+        return JSONResponse({"error": "CSV must include a Close / Value / Pct column"}, status_code=400)
+
+    # Detect optional OHL columns so we persist real OHLC when the source has it.
+    def _pick(*names):
+        for n in names:
+            if n in df.columns:
+                return n
+        return None
+    open_col = _pick("open")
+    high_col = _pick("high")
+    low_col  = _pick("low")
+
+    # Parse and upsert
+    imported = 0
+    skipped = 0
+    errors: list = []
+    first_date = None
+    last_date = None
+    ohlc_stored = 0
+    for _, row in df.iterrows():
+        d_raw = row.get("date")
+        v_raw = row.get(close_col)
+        try:
+            d = pd.to_datetime(d_raw, errors="coerce")
+            v = pd.to_numeric(v_raw, errors="coerce")
+        except Exception:
+            skipped += 1
+            continue
+        if pd.isna(d) or pd.isna(v):
+            skipped += 1
+            continue
+        # Optional OHL
+        o_val = pd.to_numeric(row.get(open_col), errors="coerce") if open_col else None
+        h_val = pd.to_numeric(row.get(high_col), errors="coerce") if high_col else None
+        l_val = pd.to_numeric(row.get(low_col),  errors="coerce") if low_col  else None
+        o_val = None if o_val is None or pd.isna(o_val) else float(o_val)
+        h_val = None if h_val is None or pd.isna(h_val) else float(h_val)
+        l_val = None if l_val is None or pd.isna(l_val) else float(l_val)
+        d_iso = d.date().isoformat()
+        try:
+            store.upsert_bpnya(d_iso, float(v), universe_size=0, open_=o_val, high=h_val, low=l_val, source="import")
+            imported += 1
+            if o_val is not None or h_val is not None or l_val is not None:
+                ohlc_stored += 1
+            first_date = d_iso if first_date is None else min(first_date, d_iso)
+            last_date = d_iso if last_date is None else max(last_date, d_iso)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{d_iso}: {e}")
+
+    return {
+        "status": "ok",
+        "imported": imported,
+        "with_ohlc": ohlc_stored,
+        "skipped": skipped,
+        "close_column_used": close_col,
+        "columns_detected": {"open": open_col, "high": high_col, "low": low_col},
+        "date_range": [first_date, last_date],
+        "errors_count": len(errors),
+        "errors_sample": errors[:5],
+    }
+
+
+@app.get("/api/universe/summary")
+def api_universe_summary():
+    """Coverage counts for the Overview universe card.
+
+    Reflects the same merge logic as _scan_universe_tickers(): S&P 500 base
+    (top-30-per-sector) unioned with Major Watchlist and IBD 50.
+    """
+    try:
+        sp500 = set(universe.get_universe_tickers()) if config.USE_FULL_UNIVERSE else set(config.MVP_UNIVERSE)
+    except Exception:
+        sp500 = set(config.MVP_UNIVERSE)
+    major = set(getattr(config, "MAJOR_WATCHLIST", []) or [])
+    ibd = _ibd50_watchlist_set()
+    all_tickers = sp500 | major | ibd
+    in_two = sum(1 for t in all_tickers if (int(t in sp500) + int(t in major) + int(t in ibd)) == 2)
+    in_three = sum(1 for t in all_tickers if (int(t in sp500) + int(t in major) + int(t in ibd)) == 3)
+    return {
+        "total": len(all_tickers),
+        "sp500": len(sp500),
+        "major": len(major),
+        "ibd50": len(ibd),
+        "overlaps": {"in_two": in_two, "in_three": in_three},
+    }
+
+
 _PERF_CHECKPOINT_MONTHS = [1, 2, 3, 4, 5, 6]
 
 
@@ -810,6 +1193,7 @@ def _build_performance_rows() -> list:
             "trigger_date": fired_date.isoformat(),
             "trigger_time_utc": a["fired_at"],
             "trigger_price": trigger_price,
+            "strike_price": compute_strike(trigger_price, direction),
             "checkpoints": checkpoints,
         })
 
@@ -837,6 +1221,7 @@ def _performance_dataframe() -> pd.DataFrame:
             "Ticker": r["ticker"],
             "Direction": r["direction"],
             "Trigger Price": r["trigger_price"],
+            "Strike Price": r["strike_price"],
         }
         for cp in r["checkpoints"]:
             m = cp["months"]

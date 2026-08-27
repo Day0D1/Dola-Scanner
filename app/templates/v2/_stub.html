@@ -1,0 +1,25 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — {{ page_title }}{% endblock %}
+{% block page_name %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ page_title }}</h1>
+    <div class="page-subtitle">{{ stub_subtitle or "Coming in the next milestone." }}</div>
+  </div>
+</div>
+
+<div class="card" style="padding: var(--sp-8); text-align: center;">
+  <div style="font-size: var(--fs-lg); color: var(--ink-2); margin-bottom: var(--sp-2);">
+    {{ stub_message or "This page hasn't landed yet." }}
+  </div>
+  <div class="text-ink-3" style="font-size: var(--fs-sm);">
+    Design system + shell is Milestone 1. This page arrives in {{ stub_milestone or "Milestone 2 or later" }}.
+  </div>
+  <div style="margin-top: var(--sp-5);">
+    <a href="/v2/" class="btn primary">Go to Overview</a>
+    <a href="/v2/dev/components" class="btn ghost">See components</a>
+  </div>
+</div>
+{% endblock %}

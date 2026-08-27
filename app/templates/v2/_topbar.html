@@ -1,0 +1,36 @@
+<header class="topbar">
+  <div class="topbar-left">
+    <button class="topbar-toggle" data-sidebar-toggle title="Toggle sidebar" aria-label="Toggle sidebar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6h18M3 12h18M3 18h18"/>
+      </svg>
+    </button>
+    <div class="topbar-page">{% block page_name %}{{ page_title or "Overview" }}{% endblock %}</div>
+  </div>
+
+  <div class="topbar-right">
+    <span class="market-pill closed" id="marketPill">
+      <span class="dot"></span>
+      <span>…</span>
+      <span class="clock mono"></span>
+    </span>
+
+    <button class="topbar-icon-btn" title="Notifications" aria-label="Notifications">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5"/>
+        <path d="M9 17a3 3 0 006 0"/>
+      </svg>
+    </button>
+    <button class="topbar-icon-btn" title="Help" aria-label="Help">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01"/>
+      </svg>
+    </button>
+    <a href="/" class="topbar-icon-btn" title="Legacy dashboard" aria-label="Legacy dashboard">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>
+      </svg>
+    </a>
+  </div>
+</header>

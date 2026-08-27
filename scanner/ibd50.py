@@ -39,6 +39,7 @@ class IBD50Snapshot:
     fetched_at: str            # ISO datetime UTC
     source_url: str
     raw_count: int             # holdings on the page (before filtering)
+    sectors: dict = None       # {ticker: sector} from the CapForce JSON
 
 
 def fetch_ibd50() -> IBD50Snapshot:
@@ -89,6 +90,7 @@ def fetch_ibd50() -> IBD50Snapshot:
         raise RuntimeError("IBD 50 holdings JSON empty or not a list")
 
     tickers: List[str] = []
+    sectors: dict = {}
     for h in raw:
         t = str(h.get("holding_ticker") or "").strip().upper()
         if not t or t in _EXCLUDE_TICKERS:
@@ -96,6 +98,9 @@ def fetch_ibd50() -> IBD50Snapshot:
         if not _TICKER_RE.match(t):
             continue
         tickers.append(t)
+        s = (h.get("sector") or "").strip()
+        if s:
+            sectors[t] = s
 
     if not tickers:
         raise RuntimeError("IBD 50 fetch returned zero tickers after filtering")
@@ -115,4 +120,5 @@ def fetch_ibd50() -> IBD50Snapshot:
         fetched_at=dt.datetime.now(dt.timezone.utc).isoformat(),
         source_url=IBD50_SOURCE_URL,
         raw_count=len(raw),
+        sectors=sectors,
     )

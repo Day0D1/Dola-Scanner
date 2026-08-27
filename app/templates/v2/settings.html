@@ -1,0 +1,279 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Settings{% endblock %}
+{% block page_name %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Settings</h1>
+    <div class="page-subtitle">Read-only view of the scanner's live configuration and scheduler state</div>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <section class="grid g-2">
+    <div class="card stack-3">
+      <div class="card-label">Signal mode</div>
+      <div class="row-2">
+        <span class="sidebar-mode-dot"></span>
+        <span class="mono text-ink" style="font-size: var(--fs-xl); font-weight: 700;" id="signalMode">–</span>
+      </div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">
+        Change via <code>SIGNAL_MODE</code> env var. In <b>puts_only</b> mode MUSK candidates and SELL_CALLS entries are muted everywhere user-facing (detection still runs for auditing).
+      </div>
+    </div>
+
+    <div class="card stack-3">
+      <div class="card-label">IBD 50 watchlist</div>
+      <div class="row-2">
+        <span class="mono text-ink" id="ibdCount">–</span>
+        <span class="text-ink-3" id="ibdAsOf">–</span>
+      </div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">
+        Source: <code>capforceetf.com/ffty/details</code> · weekly cron Mon 8 AM ET
+      </div>
+      <div class="row-2">
+        <button id="ibdRefresh" class="btn ghost sm">Refresh IBD 50 now</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Strategy parameters</div></div>
+    <div class="table-wrap">
+      <table class="table" id="paramsTable">
+        <thead><tr><th style="width: 40%;">Constant</th><th class="num" style="width: 20%;">Value</th><th>Notes</th></tr></thead>
+        <tbody id="paramsBody"><tr><td colspan="3" style="padding: var(--sp-5); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Scheduler</div></div>
+    <div class="table-wrap">
+      <table class="table" id="schedTable">
+        <thead><tr><th>Job</th><th>Next run (ET)</th><th>Trigger</th></tr></thead>
+        <tbody id="schedBody"><tr><td colspan="3" style="padding: var(--sp-5); text-align:center; color: var(--ink-3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="section-title">BPNYA data</div>
+      <div class="text-ink-3" style="font-size: var(--fs-xs);">
+        Two paths: bulk CSV import for historical backfill, or the daily form for one row at a time.
+        Both upsert by date, so re-entering an existing day silently replaces it.
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <!-- Daily form -->
+      <div class="card stack-3">
+        <div class="card-label">Add/update a single day</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">
+          OHL are optional — if you only have the Close, just fill Date + Close.
+        </div>
+        <div class="row-3" style="gap: var(--sp-2); flex-wrap: wrap;">
+          <input id="bpDayDate"  class="input" type="date" style="max-width: 160px;" />
+          <input id="bpDayOpen"  class="input" type="number" step="0.001" placeholder="Open"  style="max-width: 110px;" />
+          <input id="bpDayHigh"  class="input" type="number" step="0.001" placeholder="High"  style="max-width: 110px;" />
+          <input id="bpDayLow"   class="input" type="number" step="0.001" placeholder="Low"   style="max-width: 110px;" />
+          <input id="bpDayClose" class="input" type="number" step="0.001" placeholder="Close" style="max-width: 110px;" />
+        </div>
+        <div class="row-3" style="gap: var(--sp-3);">
+          <button id="bpDaySave" class="btn primary sm">Save day</button>
+          <span id="bpDayResult" class="mono text-ink-3" style="font-size: var(--fs-xs);"></span>
+        </div>
+      </div>
+
+      <!-- Bulk CSV -->
+      <div class="card stack-3">
+        <div class="card-label">Bulk CSV import</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">
+          CSV needs <b>Date</b> and one of <b>Close</b>/<b>Value</b>/<b>Pct</b>/<b>BPNYA</b>/<b>Percent</b>.
+          StockCharts OHLC exports (Date/Open/High/Low/Close) work as-is — OHL are stored when present.
+        </div>
+        <div class="row-3" style="gap: var(--sp-3); flex-wrap: wrap;">
+          <input id="bpnyaFile" type="file" accept=".csv,text/csv" class="input" style="max-width: 260px;" />
+          <button id="bpnyaImport" class="btn primary sm">Import CSV</button>
+        </div>
+        <span id="bpnyaResult" class="text-ink-3 mono" style="font-size: var(--fs-xs);"></span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><div class="section-title">Diagnostics</div></div>
+    <div class="card row-3" style="flex-wrap: wrap; gap: var(--sp-3);">
+      <button id="btnTelegram" class="btn ghost sm">Send Telegram test</button>
+      <a href="/api/debug" target="_blank" class="btn ghost sm">Debug JSON</a>
+      <a href="/history" class="btn ghost sm">Daily history</a>
+      <a href="/performance" class="btn ghost sm">Alert performance</a>
+      <a href="/" class="btn ghost sm">Legacy dashboard</a>
+      <span id="tgResult" class="text-ink-3 mono" style="font-size: var(--fs-xs);"></span>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $ } from "/static/v2/shared.js?v={{ asset_v }}";
+
+  async function loadSettings() {
+    try {
+      const s = await fetch("/api/settings").then((r) => r.json());
+      $("signalMode").textContent = (s.signal_mode || "puts_only").replace("_", " ").toUpperCase();
+      const rows = [
+        ["BB_PERIOD",              s.bb_period,        "Bollinger Band period"],
+        ["BB_STDDEV",              s.bb_stddev,        "Bollinger Band standard deviations"],
+        ["RSI_PERIOD",             s.rsi_period,       "RSI period (Wilder smoothing)"],
+        ["RSI_OVERSOLD",           s.rsi_oversold,     "ELON activates when RSI &lt; this"],
+        ["RSI_OVERBOUGHT",         s.rsi_overbought,   "MUSK activates when RSI &gt; this"],
+        ["CANDIDATE_LOOKBACK_DAYS",s.candidate_lookback_days, "Days a candidate stays alive after activation"],
+        ["PNF_BOX_PCT",            s.pnf_box_pct,      "% box size for stocks + SPX"],
+        ["PNF_REVERSAL",           s.pnf_reversal,     "P&amp;F reversal boxes"],
+        ["VIX_PNF_BOX_SIZE",       s.vix_pnf_box_size, "Traditional 1-pt box for VIX"],
+        ["VIX_PNF_REVERSAL",       s.vix_pnf_reversal, "VIX reversal boxes"],
+        ["SIGNAL_MODE",            s.signal_mode,      "puts_only / calls_only / both"],
+        ["USE_FULL_UNIVERSE",      String(s.use_full_universe), "false = MVP 10-ticker dev universe"],
+        ["SCAN_WORKERS",           s.scan_workers,     "Parallel Polygon fetches per scan"],
+        ["LOOKBACK_DAYS",          s.lookback_days,    "Daily OHLC history requested per ticker"],
+      ];
+      $("paramsBody").replaceChildren(...rows.map(([k, v, note]) => el(
+        "tr", {},
+        el("td", { class: "mono text-ink-2" }, k),
+        el("td", { class: "num mono text-ink" }, v == null ? "–" : String(v)),
+        el("td", { html: note, class: "text-ink-3", style: { fontSize: "var(--fs-xs)" } }),
+      )));
+    } catch (e) {
+      $("paramsBody").innerHTML = `<tr><td colspan="3" style="padding: var(--sp-5); text-align:center; color: var(--bear);">Load failed: ${e.message}</td></tr>`;
+    }
+  }
+
+  async function loadSchedule() {
+    try {
+      const s = await api.schedule();
+      const jobs = s.all_jobs || [];
+      if (!jobs.length) {
+        $("schedBody").innerHTML = '<tr><td colspan="3" style="padding: var(--sp-5); text-align:center; color: var(--ink-3);">No jobs registered.</td></tr>';
+        return;
+      }
+      const nameMap = {
+        hourly_scan: "Hourly scan (Mon-Fri 10-16 ET)",
+        eod_scan: "EOD scan (Mon-Fri 16:45 ET)",
+        ibd50_refresh: "IBD 50 refresh (Mon 8:00 ET)",
+      };
+      $("schedBody").replaceChildren(...jobs.map((j) => {
+        const dt = j.next_run_at ? new Date(j.next_run_at) : null;
+        const label = dt ? dt.toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "–";
+        return el(
+          "tr", {},
+          el("td", { class: "text-ink-2" }, nameMap[j.id] || j.id),
+          el("td", { class: "mono text-ink" }, label),
+          el("td", { class: "text-ink-3 mono", style: { fontSize: "var(--fs-xs)" } }, "cron"),
+        );
+      }));
+    } catch (e) {
+      $("schedBody").innerHTML = `<tr><td colspan="3" style="padding: var(--sp-5); text-align:center; color: var(--bear);">Load failed: ${e.message}</td></tr>`;
+    }
+  }
+
+  async function loadIbd() {
+    try {
+      const d = await api.ibd50();
+      $("ibdCount").textContent = `${d.count || 0} tickers`;
+      $("ibdAsOf").textContent = `as of ${d.as_of_date || "–"}`;
+    } catch {}
+  }
+
+  $("ibdRefresh").addEventListener("click", async (e) => {
+    const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "Refreshing…";
+    try {
+      const r = await api.ibd50Refresh();
+      if (r?.status) $("ibdAsOf").textContent = `${r.status} · as of ${r.as_of_date || "–"}`;
+      loadIbd();
+    } finally { btn.disabled = false; btn.textContent = orig; }
+  });
+
+  // Pre-fill today's date on the daily form so it's one less click
+  const today = new Date().toISOString().slice(0, 10);
+  const dateInput = $("bpDayDate");
+  if (dateInput && !dateInput.value) dateInput.value = today;
+
+  $("bpDaySave").addEventListener("click", async () => {
+    const out = $("bpDayResult");
+    const payload = {
+      date:  $("bpDayDate").value,
+      open:  $("bpDayOpen").value  || null,
+      high:  $("bpDayHigh").value  || null,
+      low:   $("bpDayLow").value   || null,
+      close: $("bpDayClose").value || null,
+    };
+    if (!payload.date || !payload.close) {
+      out.textContent = "Date and Close are required."; out.style.color = "var(--warn)"; return;
+    }
+    out.textContent = "saving…"; out.style.color = "";
+    try {
+      const r = await fetch("/api/bpnya/day", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        out.textContent = `Failed: ${d.error || r.statusText}`; out.style.color = "var(--bear)"; return;
+      }
+      out.textContent = `Saved ${d.date} (close ${d.close})`;
+      out.style.color = "var(--bull)";
+      api.refresh(false).catch(() => {});
+      // Clear numeric fields for the next entry
+      for (const id of ["bpDayOpen","bpDayHigh","bpDayLow","bpDayClose"]) $(id).value = "";
+    } catch (err) {
+      out.textContent = `Failed: ${err.message}`; out.style.color = "var(--bear)";
+    }
+  });
+
+  $("bpnyaImport").addEventListener("click", async () => {
+    const input = $("bpnyaFile");
+    const out = $("bpnyaResult");
+    const file = input.files?.[0];
+    if (!file) { out.textContent = "Choose a CSV file first."; out.style.color = "var(--warn)"; return; }
+    out.textContent = "uploading & parsing…"; out.style.color = "";
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const r = await fetch("/api/bpnya/import", { method: "POST", body: fd });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        out.textContent = `Failed: ${d.error || r.statusText}`;
+        out.style.color = "var(--bear)"; return;
+      }
+      out.textContent = `Imported ${d.imported} rows (${d.date_range?.[0]} → ${d.date_range?.[1]}) using column "${d.close_column_used}"` +
+        (d.skipped ? ` · skipped ${d.skipped}` : "");
+      out.style.color = "var(--bull)";
+      // Refresh scan so downstream (BPNYA P&F, Time Series, breadth) picks up the new history.
+      api.refresh(false).catch(() => {});
+    } catch (err) {
+      out.textContent = `Failed: ${err.message}`;
+      out.style.color = "var(--bear)";
+    }
+  });
+
+  $("btnTelegram").addEventListener("click", async (e) => {
+    const out = $("tgResult");
+    out.textContent = "sending…"; out.style.color = "";
+    try {
+      const r = await fetch("/api/telegram_test").then((r) => r.json());
+      out.textContent = JSON.stringify(r);
+      out.style.color = r.ok ? "var(--bull)" : "var(--bear)";
+    } catch (err) {
+      out.textContent = err.message; out.style.color = "var(--bear)";
+    }
+  });
+
+  loadSettings(); loadSchedule(); loadIbd();
+</script>
+{% endblock %}

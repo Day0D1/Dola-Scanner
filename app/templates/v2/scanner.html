@@ -1,0 +1,243 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Scanner{% endblock %}
+{% block page_name %}Scanner{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Scanner</h1>
+    <div class="page-subtitle"><span id="totalCount">–</span> stocks · <span id="filteredCount">0</span> shown · click a row to open its chart</div>
+  </div>
+  <div class="page-actions">
+    <button class="btn primary" id="refreshBtn">Refresh scan</button>
+  </div>
+</div>
+
+<div class="stack-4">
+
+  <div class="card" style="padding: var(--sp-3);">
+    <div class="stack-3">
+      <div class="row-3" style="flex-wrap: wrap; gap: var(--sp-4);">
+        <div class="search-input">
+          <span class="search-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
+          </span>
+          <input id="searchInput" class="input" type="search" placeholder="Search ticker…" autocomplete="off" style="width: 220px;" />
+        </div>
+
+        <div class="chip-row" data-group="signal">
+          <button class="chip active" data-signal="ALL">All</button>
+          <button class="chip" data-signal="MAJOR"><span class="tag-star">★</span> Major</button>
+          <button class="chip" data-signal="IBD50"><span class="tag-fire">🔥</span> IBD 50</button>
+          <button class="chip" data-signal="ENTRIES">Entries</button>
+          <button class="chip" data-signal="CANDIDATES">Candidates</button>
+          <button class="chip" data-signal="ELON">ELON</button>
+          <button class="chip" data-signal="MUSK">MUSK</button>
+        </div>
+      </div>
+
+      <div class="row-3" style="flex-wrap: wrap; gap: var(--sp-4);">
+        <div class="chip-row" data-group="rsi">
+          <span class="text-ink-3" style="font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em;">RSI</span>
+          <button class="chip active" data-rsi="ALL">All</button>
+          <button class="chip" data-rsi="OVERSOLD">&lt; 30</button>
+          <button class="chip" data-rsi="OVERBOUGHT">&gt; 70</button>
+          <button class="chip" data-rsi="NEUTRAL">30 – 70</button>
+        </div>
+
+        <div class="chip-row" data-group="pnf">
+          <span class="text-ink-3" style="font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em;">P&amp;F</span>
+          <button class="chip active" data-pnf="ALL">All</button>
+          <button class="chip" data-pnf="X">X</button>
+          <button class="chip" data-pnf="O">O</button>
+        </div>
+
+        <select id="sectorSelect" class="select" style="min-width: 160px;">
+          <option value="ALL">All sectors</option>
+        </select>
+
+        <select id="sortSelect" class="select" style="min-width: 180px;">
+          <option value="signal">Sort: Signal strength</option>
+          <option value="ticker_asc">Sort: Ticker A–Z</option>
+          <option value="ticker_desc">Sort: Ticker Z–A</option>
+          <option value="rsi_asc">Sort: RSI low → high</option>
+          <option value="rsi_desc">Sort: RSI high → low</option>
+          <option value="price_asc">Sort: Price low → high</option>
+          <option value="price_desc">Sort: Price high → low</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="scannerTable">
+      <thead>
+        <tr>
+          <th style="width: 32%;">Ticker</th>
+          <th style="width: 110px;">Setup</th>
+          <th style="width: 120px;">Action</th>
+          <th class="num" style="width: 70px;">RSI</th>
+          <th class="num" style="width: 60px;">P&amp;F</th>
+          <th class="num" style="width: 110px;">Price</th>
+          <th class="num" style="width: 110px;">BB Low</th>
+          <th class="num" style="width: 110px;">BB Up</th>
+          <th style="width: 20%;">Sector</th>
+        </tr>
+      </thead>
+      <tbody id="scannerBody">
+        <tr><td colspan="9" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $, $$, signClass } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { tickerCell, setupBadge, actionBadge, colMarker } from "/static/v2/components.js?v={{ asset_v }}";
+
+  const state = {
+    signals: [],
+    filter: { query: "", signal: "ALL", rsi: "ALL", pnf: "ALL", sector: "ALL" },
+    sort: "signal",
+  };
+
+  function signalStrength(s) {
+    if (s.entry_trigger) return 3;
+    if (s.candidate) return 2;
+    return 1;
+  }
+
+  function passesFilter(s) {
+    const f = state.filter;
+    if (f.query) {
+      if (!s.ticker.toUpperCase().includes(f.query.toUpperCase())) return false;
+    }
+    switch (f.signal) {
+      case "MAJOR":      if (!s.on_watchlist) return false; break;
+      case "IBD50":      if (!s.on_ibd50) return false; break;
+      case "ENTRIES":    if (!s.entry_trigger) return false; break;
+      case "CANDIDATES": if (!s.candidate) return false; break;
+      case "ELON":       if (s.candidate !== "ELON") return false; break;
+      case "MUSK":       if (s.candidate !== "MUSK") return false; break;
+    }
+    switch (f.rsi) {
+      case "OVERSOLD":   if (!(s.rsi != null && s.rsi < 30)) return false; break;
+      case "OVERBOUGHT": if (!(s.rsi != null && s.rsi > 70)) return false; break;
+      case "NEUTRAL":    if (!(s.rsi != null && s.rsi >= 30 && s.rsi <= 70)) return false; break;
+    }
+    if (f.pnf !== "ALL" && s.pnf_column !== f.pnf) return false;
+    if (f.sector !== "ALL" && s.sector !== f.sector) return false;
+    return true;
+  }
+
+  function sortSignals(list) {
+    const arr = [...list];
+    switch (state.sort) {
+      case "ticker_asc":  arr.sort((a, b) => a.ticker.localeCompare(b.ticker)); break;
+      case "ticker_desc": arr.sort((a, b) => b.ticker.localeCompare(a.ticker)); break;
+      case "rsi_asc":     arr.sort((a, b) => (a.rsi ?? 999) - (b.rsi ?? 999)); break;
+      case "rsi_desc":    arr.sort((a, b) => (b.rsi ?? -1) - (a.rsi ?? -1)); break;
+      case "price_asc":   arr.sort((a, b) => (a.last_close ?? 0) - (b.last_close ?? 0)); break;
+      case "price_desc":  arr.sort((a, b) => (b.last_close ?? 0) - (a.last_close ?? 0)); break;
+      case "signal":
+      default:
+        arr.sort((a, b) => {
+          const d = signalStrength(b) - signalStrength(a);
+          if (d !== 0) return d;
+          return a.ticker.localeCompare(b.ticker);
+        });
+    }
+    return arr;
+  }
+
+  function rowFor(s) {
+    return el("tr", { onclick: () => window.location.href = `/v2/charts/${s.ticker}`, style: { cursor: "pointer" } },
+      el("td", { class: "ticker" }, tickerCell(s)),
+      el("td", {}, s.candidate ? setupBadge(s.candidate) : el("span", { class: "text-ink-4" }, "–")),
+      el("td", {}, s.entry_trigger ? actionBadge(s.entry_trigger) : el("span", { class: "text-ink-4" }, "–")),
+      el("td", { class: "num mono", style: s.rsi != null && (s.rsi < 30 ? { color: "var(--bull)" } : (s.rsi > 70 ? { color: "var(--bear)" } : {})) },
+        s.rsi != null ? s.rsi.toFixed(1) : "–"),
+      el("td", { class: "num" }, colMarker(s.pnf_column)),
+      el("td", { class: "num mono text-ink" }, fmt.price(s.last_close)),
+      el("td", { class: "num mono text-ink-2" }, fmt.num(s.bb_lower, 2)),
+      el("td", { class: "num mono text-ink-2" }, fmt.num(s.bb_upper, 2)),
+      el("td", { class: "text-ink-3", style: { fontSize: "var(--fs-xs)" } }, s.sector || "–"),
+    );
+  }
+
+  function render() {
+    const filtered = state.signals.filter(passesFilter);
+    const sorted = sortSignals(filtered);
+    const body = $("scannerBody");
+    if (!sorted.length) {
+      body.innerHTML = '<tr><td colspan="9" style="padding: var(--sp-6); text-align:center; color: var(--ink-3);">No stocks match the current filters.</td></tr>';
+    } else {
+      body.replaceChildren(...sorted.map(rowFor));
+    }
+    $("filteredCount").textContent = sorted.length;
+    $("totalCount").textContent = state.signals.length;
+  }
+
+  function populateSectorSelect() {
+    const cur = state.filter.sector;
+    const sel = $("sectorSelect");
+    const seen = new Set();
+    const sectors = [];
+    for (const s of state.signals) {
+      if (s.sector && !seen.has(s.sector)) { seen.add(s.sector); sectors.push(s.sector); }
+    }
+    sectors.sort();
+    sel.innerHTML = '<option value="ALL">All sectors</option>' +
+      sectors.map((sec) => `<option value="${sec}">${sec}</option>`).join("");
+    sel.value = cur;
+  }
+
+  async function loadScan(retries = 8) {
+    try {
+      const s = await api.scan();
+      if (s.status === "loading" && retries > 0) {
+        setTimeout(() => loadScan(retries - 1), 2000); return;
+      }
+      state.signals = s.signals || [];
+      populateSectorSelect();
+      render();
+    } catch (e) {
+      $("scannerBody").innerHTML = `<tr><td colspan="9" style="padding: var(--sp-6); text-align:center; color: var(--bear);">Load failed: ${e.message}</td></tr>`;
+    }
+  }
+
+  // --- Wiring ---
+
+  function setChipGroup(group, value) {
+    $$(`[data-group="${group}"] .chip`).forEach((c) => {
+      c.classList.toggle("active", c.dataset[group] === value);
+    });
+  }
+
+  $$("[data-group=\"signal\"] .chip").forEach((c) => c.addEventListener("click", () => {
+    state.filter.signal = c.dataset.signal; setChipGroup("signal", c.dataset.signal); render();
+  }));
+  $$("[data-group=\"rsi\"] .chip").forEach((c) => c.addEventListener("click", () => {
+    state.filter.rsi = c.dataset.rsi; setChipGroup("rsi", c.dataset.rsi); render();
+  }));
+  $$("[data-group=\"pnf\"] .chip").forEach((c) => c.addEventListener("click", () => {
+    state.filter.pnf = c.dataset.pnf; setChipGroup("pnf", c.dataset.pnf); render();
+  }));
+  $("sectorSelect").addEventListener("change", (e) => { state.filter.sector = e.target.value; render(); });
+  $("sortSelect").addEventListener("change", (e) => { state.sort = e.target.value; render(); });
+  $("searchInput").addEventListener("input", (e) => { state.filter.query = e.target.value.trim(); render(); });
+
+  $("refreshBtn").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = "Scanning…";
+    try { await api.refresh(false); } catch {}
+    setTimeout(() => { loadScan(); }, 2500);
+    setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh scan"; }, 6000);
+  });
+
+  loadScan();
+  setInterval(loadScan, 30_000);
+</script>
+{% endblock %}

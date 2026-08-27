@@ -94,6 +94,18 @@ def init_db() -> None:
         cols = [r[1] for r in c.execute("PRAGMA table_info(entry_alerts)")]
         if "trigger_price" not in cols:
             c.execute("ALTER TABLE entry_alerts ADD COLUMN trigger_price REAL")
+        # BPNYA gained real OHLC (previously we only stored a single pct = close).
+        # Add the three new columns idempotently; historical rows leave them NULL
+        # and read paths fall back to (open=high=low=close=pct) for those rows.
+        # `source` distinguishes app-generated estimates ('scan') from user-provided
+        # authoritative data ('import' via CSV, 'manual' via daily-entry form). The
+        # scan will not overwrite a row whose source is anything other than 'scan'.
+        bp_cols = [r[1] for r in c.execute("PRAGMA table_info(bpnya_history)")]
+        for col in ("open", "high", "low"):
+            if col not in bp_cols:
+                c.execute(f"ALTER TABLE bpnya_history ADD COLUMN {col} REAL")
+        if "source" not in bp_cols:
+            c.execute("ALTER TABLE bpnya_history ADD COLUMN source TEXT DEFAULT 'scan'")
 
 
 def record_scan(scan_at: dt.datetime, breadth: BreadthReading, signals: Iterable[StockSignal]) -> int:
@@ -187,28 +199,92 @@ def mark_candidate_alerted(ticker: str, candidate_type: str, when: Optional[dt.d
         )
 
 
-def upsert_bpnya(date_str: str, pct: float, universe_size: int) -> None:
+def upsert_bpnya(
+    date_str: str,
+    pct: float,
+    universe_size: int,
+    open_: Optional[float] = None,
+    high: Optional[float] = None,
+    low: Optional[float] = None,
+    source: str = "scan",
+) -> None:
+    """Upsert one BPNYA daily row. `pct` is the close. OHLC columns are
+    optional — if omitted, the read path treats open=high=low=close=pct.
+
+    `source` = 'scan' (auto-generated from the scan universe) | 'import' (bulk
+    CSV) | 'manual' (single-day form). Auto-scan writes with source='scan' and
+    will NEVER overwrite a row whose current source is 'import' or 'manual' —
+    user-provided StockCharts data always wins.
+    """
     now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    # Two update policies:
+    #   source='scan'  → update only if existing row's source is 'scan' (or NULL)
+    #   source='import' or 'manual' → always update (user override)
     with _connect() as c:
-        c.execute(
-            """
-            INSERT INTO bpnya_history (date, pct, universe_size, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(date) DO UPDATE SET
-                pct = excluded.pct,
-                universe_size = excluded.universe_size,
-                updated_at = excluded.updated_at
-            """,
-            (date_str, pct, universe_size, now_iso),
-        )
+        if source == "scan":
+            c.execute(
+                """
+                INSERT INTO bpnya_history
+                    (date, pct, universe_size, updated_at, open, high, low, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    pct           = CASE WHEN bpnya_history.source IN ('import','manual')
+                                         THEN bpnya_history.pct ELSE excluded.pct END,
+                    universe_size = CASE WHEN bpnya_history.source IN ('import','manual')
+                                         THEN bpnya_history.universe_size ELSE excluded.universe_size END,
+                    updated_at    = CASE WHEN bpnya_history.source IN ('import','manual')
+                                         THEN bpnya_history.updated_at ELSE excluded.updated_at END,
+                    open          = COALESCE(bpnya_history.open, excluded.open),
+                    high          = COALESCE(bpnya_history.high, excluded.high),
+                    low           = COALESCE(bpnya_history.low,  excluded.low)
+                """,
+                (date_str, pct, universe_size, now_iso, open_, high, low, source),
+            )
+        else:
+            # import/manual — always wins; also promote source label.
+            c.execute(
+                """
+                INSERT INTO bpnya_history
+                    (date, pct, universe_size, updated_at, open, high, low, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    pct           = excluded.pct,
+                    universe_size = excluded.universe_size,
+                    updated_at    = excluded.updated_at,
+                    open          = COALESCE(excluded.open, bpnya_history.open),
+                    high          = COALESCE(excluded.high, bpnya_history.high),
+                    low           = COALESCE(excluded.low,  bpnya_history.low),
+                    source        = excluded.source
+                """,
+                (date_str, pct, universe_size, now_iso, open_, high, low, source),
+            )
 
 
 def get_bpnya_history() -> list:
-    """Returns [(date_str, pct), ...] ordered oldest-first."""
+    """Returns [(date_str, pct), ...] ordered oldest-first.
+    Kept for backwards-compat; new callers should use get_bpnya_history_ohlc().
+    """
     with _connect() as c:
         return [(r[0], r[1]) for r in c.execute(
             "SELECT date, pct FROM bpnya_history ORDER BY date ASC"
         )]
+
+
+def get_bpnya_history_ohlc() -> list:
+    """Full OHLC history. Returns [(date_str, open, high, low, close), ...]
+    ordered oldest-first. Missing OHLC columns fall back to close."""
+    with _connect() as c:
+        rows = c.execute(
+            "SELECT date, open, high, low, pct FROM bpnya_history ORDER BY date ASC"
+        ).fetchall()
+    return [
+        (r[0],
+         (r[1] if r[1] is not None else r[4]),
+         (r[2] if r[2] is not None else r[4]),
+         (r[3] if r[3] is not None else r[4]),
+         r[4])
+        for r in rows
+    ]
 
 
 def get_bpnya_latest() -> Optional[dict]:

@@ -80,7 +80,7 @@
       const months = payload.months;
       const rows = payload.rows;
 
-      const headerCells = ["Trigger Date", "Ticker", "Direction", "Trigger $"]
+      const headerCells = ["Trigger Date", "Ticker", "Direction", "Trigger $", "Strike"]
         .concat(months.map(m => `+${m}M`));
       $("perfHead").innerHTML = headerCells.map(h => `<th>${h}</th>`).join("");
 
@@ -93,11 +93,13 @@
       const html = rows.map(r => {
         const dirCls = r.direction === "SELL_PUTS" ? "dir-puts" : "dir-calls";
         const dirLabel = r.direction === "SELL_PUTS" ? "sell puts" : "sell calls";
+        const strikeStr = r.strike_price != null ? `$${Number(r.strike_price).toFixed(0)}` : "-";
         const cells = [
           `<td>${fmtDateISO(r.trigger_date)}</td>`,
           `<td class="ticker">${r.ticker}</td>`,
           `<td class="${dirCls}">${dirLabel}</td>`,
           `<td>${fmtPrice(r.trigger_price)}</td>`,
+          `<td class="strike"><b>${strikeStr}</b></td>`,
         ];
         for (const cp of r.checkpoints) {
           const cls = cellClass(cp);

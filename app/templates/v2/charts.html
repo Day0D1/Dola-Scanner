@@ -1,0 +1,133 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Charts{% endblock %}
+{% block page_name %}Charts{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Charts</h1>
+    <div class="page-subtitle">Pick a ticker or index to open its full chart workspace</div>
+  </div>
+</div>
+
+<div class="stack-6">
+
+  <div class="card">
+    <div class="card-label" style="margin-bottom: var(--sp-2);">Search</div>
+    <div class="search-input" style="width: 100%; max-width: 420px;">
+      <span class="search-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
+      </span>
+      <input id="tickerSearch" class="input" type="search" placeholder="Type a ticker (e.g. AAPL) then Enter" autocomplete="off" style="width: 100%;" />
+    </div>
+    <div class="text-ink-3" style="font-size: var(--fs-xs); margin-top: var(--sp-2);">
+      Matches from the ~<span id="totalTickers">–</span>-ticker scan universe. Enter opens the ticker's chart page.
+    </div>
+    <div id="matchList" class="stack-1" style="margin-top: var(--sp-3);"></div>
+  </div>
+
+  <div>
+    <div class="section-head"><div class="section-title">Indices</div></div>
+    <div class="grid g-3">
+      <a href="/v2/charts/SPX" class="card clickable stack-2">
+        <div class="card-label">SPX</div>
+        <div class="text-ink-2">S&amp;P 500 · Percentage P&amp;F 1% · 3-box</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">Regime input for the risk gate</div>
+      </a>
+      <a href="/v2/charts/VIX" class="card clickable stack-2">
+        <div class="card-label">VIX</div>
+        <div class="text-ink-2">Volatility Index · Traditional 1-pt · 2-box</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">Risk pillar</div>
+      </a>
+      <a href="/v2/charts/BPNYA" class="card clickable stack-2">
+        <div class="card-label">BPNYA</div>
+        <div class="text-ink-2">NYSE Bullish % · Traditional 1-pt · 2-box</div>
+        <div class="text-ink-3" style="font-size: var(--fs-xs);">Self-computed from live scans</div>
+      </a>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-head"><div class="section-title">Live entries — click to open chart</div></div>
+    <div id="liveEntries" class="grid g-auto">
+      <div class="card stack-2"><div class="skeleton" style="height:14px; width:40%;"></div><div class="skeleton" style="height:26px; width:60%;"></div></div>
+      <div class="card stack-2"><div class="skeleton" style="height:14px; width:40%;"></div><div class="skeleton" style="height:26px; width:60%;"></div></div>
+      <div class="card stack-2"><div class="skeleton" style="height:14px; width:40%;"></div><div class="skeleton" style="height:26px; width:60%;"></div></div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { api, fmt, el, $ } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { setupBadge, actionBadge, colMarker, majorTag, ibdTag } from "/static/v2/components.js?v={{ asset_v }}";
+
+  let allTickers = [];
+
+  async function loadTickers() {
+    try {
+      const data = await fetch("/api/tickers").then((r) => r.json());
+      // /api/tickers returns [{ticker, sector}, ...]; flatten to strings.
+      allTickers = (data.tickers || []).map((x) => typeof x === "string" ? x : x.ticker);
+      $("totalTickers").textContent = allTickers.length;
+    } catch { $("totalTickers").textContent = "?"; }
+  }
+
+  function renderMatches(q) {
+    const host = $("matchList");
+    if (!q) { host.replaceChildren(); return; }
+    const up = q.toUpperCase();
+    const matches = allTickers.filter((t) => t.startsWith(up)).slice(0, 8);
+    host.replaceChildren(...matches.map((t) => el(
+      "a", { href: `/v2/charts/${t}`, class: "row-flex row-between", style: { padding: "6px var(--sp-3)", borderRadius: "var(--r-sm)", background: "var(--panel-2)" } },
+      el("span", { class: "mono", style: { fontWeight: 700 } }, t),
+      el("span", { class: "text-ink-3", style: { fontSize: "var(--fs-xs)" } }, "open →"),
+    )));
+  }
+
+  $("tickerSearch").addEventListener("input", (e) => renderMatches(e.target.value.trim()));
+  $("tickerSearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const q = e.target.value.trim().toUpperCase();
+      if (q && allTickers.includes(q)) window.location.href = `/v2/charts/${q}`;
+      else {
+        // fall back to first match
+        const first = allTickers.find((t) => t.startsWith(q));
+        if (first) window.location.href = `/v2/charts/${first}`;
+      }
+    }
+  });
+
+  async function loadLive(retries = 8) {
+    try {
+      const s = await api.scan();
+      if (s.status === "loading" && retries > 0) { setTimeout(() => loadLive(retries - 1), 2000); return; }
+      const entries = (s.signals || []).filter((x) => x.entry_trigger).slice(0, 8);
+      const host = $("liveEntries");
+      if (!entries.length) {
+        host.innerHTML = '<div class="text-ink-3" style="padding: var(--sp-4);">No live entries right now.</div>';
+        return;
+      }
+      host.replaceChildren(...entries.map((e) => el(
+        "a", { href: `/v2/charts/${e.ticker}`, class: "card clickable stack-2" },
+        el("div", { class: "row-flex row-between" },
+          el("div", { class: "mono", style: { fontWeight: 700, fontSize: "var(--fs-lg)" } },
+            (e.on_watchlist ? "★ " : "") + (e.on_ibd50 ? "🔥 " : "") + e.ticker),
+          colMarker(e.pnf_column),
+        ),
+        el("div", { class: "row-2" }, setupBadge(e.candidate), actionBadge(e.entry_trigger)),
+        el("div", { class: "row-2 mono text-ink-3", style: { fontSize: "var(--fs-xs)" } },
+          el("span", {}, `RSI ${fmt.num(e.rsi, 1)}`),
+          el("span", {}, "·"),
+          el("span", { class: "text-ink" }, fmt.price(e.last_close)),
+        ),
+      )));
+    } catch (e) { console.warn(e); }
+  }
+
+  loadTickers();
+  loadLive();
+</script>
+{% endblock %}

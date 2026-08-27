@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Dola Terminal{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/v2/design.css?v={{ asset_v }}" />
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="app" id="appRoot">
+    {% include "v2/_sidebar.html" %}
+    {% include "v2/_topbar.html" %}
+    <main class="content">
+      <div class="content-inner">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+  {% include "v2/_bottom_nav.html" %}
+
+  <script type="module">
+    import { wireSidebar, mountMarketPill } from "/static/v2/shared.js?v={{ asset_v }}";
+    wireSidebar();
+    mountMarketPill(document.getElementById("marketPill"));
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

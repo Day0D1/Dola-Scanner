@@ -1,0 +1,274 @@
+{% extends "v2/_base.html" %}
+{% block title %}Dola — Time Series · {{ ticker }}{% endblock %}
+{% block page_name %}Time Series · {{ ticker }}{% endblock %}
+
+{% block head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title mono">{{ ticker }}</h1>
+    <div class="page-subtitle" id="tsSubtitle">Historical grid + linked visual panels</div>
+  </div>
+  <div class="page-actions">
+    <div class="chip-row" id="viewChips">
+      <button class="chip active" data-view="grid">Grid</button>
+      <button class="chip" data-view="visual">Visual</button>
+    </div>
+    <div class="search-input" style="position: relative;">
+      <span class="search-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
+      </span>
+      <input id="tsSwitchInput" class="input" type="search" placeholder="Change ticker…" autocomplete="off" style="width: 180px;" />
+      <ul id="tsSwitchResults" class="ticker-search-results hidden"></ul>
+    </div>
+    <select id="fvDays" class="select">
+      <option value="30">30 days</option>
+      <option value="60">60 days</option>
+      <option value="90" selected>90 days</option>
+      <option value="180">180 days</option>
+      <option value="270">270 days</option>
+      <option value="252">1 year</option>
+      <option value="378">1.5 years</option>
+      <option value="504">2 years</option>
+    </select>
+    <button id="fvZoomOut" class="btn ghost sm" title="Show more days">–</button>
+    <button id="fvZoomIn"  class="btn ghost sm" title="Show fewer days">+</button>
+    <a id="fvExport" class="btn primary sm" href="#">Export Excel</a>
+    <button id="fvRefresh" class="btn ghost sm">Refresh</button>
+    <a href="/v2/charts/{{ ticker }}" class="btn ghost sm">Chart</a>
+    <!-- fvSearchInput/fvSearchResults are legacy IDs used by fair_value.js; hidden here since the visible tsSwitchInput above routes to v2 URLs -->
+    <input id="fvSearchInput" type="hidden" />
+    <ul id="fvSearchResults" style="display:none"></ul>
+  </div>
+</div>
+
+<!-- Grid view -->
+<div id="viewGrid">
+  <div class="card" style="padding: var(--sp-3); margin-bottom: var(--sp-3);">
+    <div class="row-3 text-ink-3" style="flex-wrap: wrap; gap: var(--sp-3); font-size: var(--fs-xs);">
+      <span class="row-2"><span class="fv-swatch bb-upper">H</span> BB upper</span>
+      <span class="row-2"><span class="fv-swatch bb-middle">F</span> BB middle</span>
+      <span class="row-2"><span class="fv-swatch bb-lower">L</span> BB lower</span>
+      <span class="row-2"><span class="fv-swatch close"></span> Close</span>
+      <span class="row-2"><span class="fv-swatch close-on-upper"></span> Close at upper</span>
+      <span class="row-2"><span class="fv-swatch close-on-mid"></span> Close at fair value</span>
+      <span class="row-2"><span class="fv-swatch close-on-lower"></span> Close at lower</span>
+      <span class="row-2"><span class="fv-swatch range"></span> Intraday range</span>
+      <span class="text-ink-3">·</span>
+      <span>Ctrl + wheel / pinch to zoom cells</span>
+    </div>
+  </div>
+  <div id="fvContainer" class="fv-container">
+    <div id="fvLoading" class="fv-loading">Loading…</div>
+  </div>
+</div>
+
+<!-- Visual mode (stacked linked panels) -->
+<div id="viewVisual" style="display: none;">
+  <div class="stack-3">
+    <div class="card" style="padding: var(--sp-3);">
+      <div class="section-title" style="margin-bottom: var(--sp-2);">Price · Bollinger Bands</div>
+      <div id="vsPrice" style="height: 340px;"></div>
+    </div>
+    <div class="grid g-2">
+      <div class="card" style="padding: var(--sp-3);">
+        <div class="section-title" style="margin-bottom: var(--sp-2);">RSI(10) · 39 / 70 thresholds</div>
+        <div id="vsRsi" style="height: 220px;"></div>
+      </div>
+      <div class="card" style="padding: var(--sp-3);">
+        <div class="section-title" style="margin-bottom: var(--sp-2);">Bollinger Band width (upper − lower)</div>
+        <div id="vsBbw" style="height: 220px;"></div>
+      </div>
+    </div>
+    <div class="card" style="padding: var(--sp-3);">
+      <div class="section-title" style="margin-bottom: var(--sp-2);">Regime + Risk over time</div>
+      <div id="vsRegimeStrip" style="height: 60px; border-radius: var(--r-sm); overflow: hidden; background: var(--panel-2);"></div>
+      <div id="vsRiskStrip" style="height: 60px; border-radius: var(--r-sm); overflow: hidden; background: var(--panel-2); margin-top: var(--sp-2);"></div>
+      <div class="row-3 text-ink-3" style="gap: var(--sp-4); font-size: var(--fs-xs); margin-top: var(--sp-2);">
+        <span class="row-2"><span style="width:12px;height:12px;background:var(--bull);border-radius:2px;display:inline-block;"></span> BUY / LOW risk</span>
+        <span class="row-2"><span style="width:12px;height:12px;background:var(--warn);border-radius:2px;display:inline-block;"></span> MEDIUM risk</span>
+        <span class="row-2"><span style="width:12px;height:12px;background:var(--bear);border-radius:2px;display:inline-block;"></span> SELL / HIGH risk</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<!-- Legacy grid renderer, reused as-is (works standalone on window.FV_TICKER). -->
+<script>window.FV_TICKER = "{{ ticker }}";</script>
+<script src="/static/autocomplete.js?v={{ asset_v }}"></script>
+<script src="/static/fair_value.js?v={{ asset_v }}"></script>
+
+<script type="module">
+  import { api, fmt, el, $, $$ } from "/static/v2/shared.js?v={{ asset_v }}";
+  import { palette, renderCandlestick } from "/static/v2/charts.js?v={{ asset_v }}";
+
+  const T = "{{ ticker }}";
+
+  // ---- Visual Mode ------------------------------------------
+  async function loadVisual() {
+    const days = parseInt(document.getElementById("fvDays")?.value || "90", 10);
+    try {
+      const data = await fetch(`/api/fair_value/${encodeURIComponent(T)}?days=${days}`).then((r) => r.json());
+      if (!data.days || !data.days.length) return;
+      const rows = data.days;
+      const x = rows.map((r) => r.date);
+
+      const P = palette;
+      const commonX = {
+        gridcolor: P.grid(), zerolinecolor: P.grid(),
+        type: "date", tickformat: "%b %d", hoverformat: "%b %d, %Y",
+        tickfont: { color: P.ink3() },
+        showspikes: true, spikemode: "across", spikecolor: P.accent(),
+      };
+      const layoutBase = {
+        dragmode: "pan",
+        margin: { l: 8, r: 60, t: 6, b: 30 },
+        paper_bgcolor: P.bg(), plot_bgcolor: P.bg(),
+        font: { color: P.ink(), family: "JetBrains Mono, monospace", size: 11 },
+        hovermode: "x unified",
+        hoverlabel: { bgcolor: getComputedStyle(document.documentElement).getPropertyValue("--panel-2").trim() || "#111A24", font: { family: "JetBrains Mono, monospace" } },
+      };
+
+      // Price + BB
+      Plotly.newPlot("vsPrice", [
+        { type: "scatter", mode: "lines", x, y: rows.map((r) => r.bb_upper),
+          line: { color: P.accent(), width: 1, dash: "dot" }, opacity: 0.5, hoverinfo: "skip", showlegend: false },
+        { type: "scatter", mode: "lines", x, y: rows.map((r) => r.bb_lower),
+          line: { color: P.accent(), width: 1, dash: "dot" }, opacity: 0.5, fill: "tonexty",
+          fillcolor: "rgba(91, 155, 255, 0.06)", hoverinfo: "skip", showlegend: false },
+        { type: "scatter", mode: "lines", x, y: rows.map((r) => r.bb_middle),
+          line: { color: P.ink3(), width: 1, dash: "dash" }, opacity: 0.5, hoverinfo: "skip", showlegend: false },
+        { type: "scatter", mode: "lines", x, y: rows.map((r) => r.close),
+          line: { color: P.accent(), width: 1.8 }, name: "Close",
+          hovertemplate: "%{y:.2f}<extra></extra>", showlegend: false },
+      ], {
+        ...layoutBase,
+        xaxis: commonX,
+        yaxis: { side: "right", gridcolor: P.grid(), tickfont: { color: P.ink3() } },
+      }, { displayModeBar: false, responsive: true, scrollZoom: true });
+
+      // RSI
+      const rsiLo = data.settings?.rsi_oversold ?? 39;
+      const rsiHi = data.settings?.rsi_overbought ?? 70;
+      Plotly.newPlot("vsRsi", [
+        { type: "scatter", mode: "lines", x, y: rows.map((r) => r.rsi),
+          line: { color: P.accent(), width: 1.4 }, name: "RSI",
+          hovertemplate: "%{y:.1f}<extra></extra>", showlegend: false },
+      ], {
+        ...layoutBase,
+        xaxis: commonX,
+        yaxis: { side: "right", gridcolor: P.grid(), range: [0, 100],
+                 tickvals: [rsiLo, 50, rsiHi], tickfont: { color: P.ink3() } },
+        shapes: [
+          { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: rsiLo, y1: rsiLo,
+            line: { color: P.bull(), width: 1, dash: "dash" }, opacity: 0.5 },
+          { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: rsiHi, y1: rsiHi,
+            line: { color: P.bear(), width: 1, dash: "dash" }, opacity: 0.5 },
+          { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: 50, y1: 50,
+            line: { color: P.ink3(), width: 1, dash: "dot" }, opacity: 0.3 },
+        ],
+      }, { displayModeBar: false, responsive: true, scrollZoom: true });
+
+      // BB width
+      Plotly.newPlot("vsBbw", [
+        { type: "scatter", mode: "lines", x,
+          y: rows.map((r) => r.bb_upper != null && r.bb_lower != null ? r.bb_upper - r.bb_lower : null),
+          line: { color: P.warn(), width: 1.4 }, fill: "tozeroy",
+          fillcolor: "rgba(245, 158, 11, 0.08)", hovertemplate: "%{y:.2f}<extra></extra>", showlegend: false },
+      ], {
+        ...layoutBase,
+        xaxis: commonX,
+        yaxis: { side: "right", gridcolor: P.grid(), tickfont: { color: P.ink3() } },
+      }, { displayModeBar: false, responsive: true, scrollZoom: true });
+
+      // Regime + Risk strips (custom SVG segmentation)
+      renderStrip("vsRegimeStrip", rows.map((r) => ({ date: r.date, cls: regimeClass(r.trend) })));
+      renderStrip("vsRiskStrip",   rows.map((r) => ({ date: r.date, cls: riskClass(r.risk) })));
+    } catch (e) { console.warn("visual load failed", e); }
+  }
+
+  function regimeClass(t) {
+    if (t === "B") return "bull";
+    if (t === "S") return "bear";
+    return "ink3";
+  }
+  function riskClass(r) {
+    if (r === "LOW") return "bull";
+    if (r === "MEDIUM") return "warn";
+    if (r === "HIGH") return "bear";
+    return "ink3";
+  }
+  function stripColor(cls) {
+    return cls === "bull" ? "var(--bull)"
+         : cls === "bear" ? "var(--bear)"
+         : cls === "warn" ? "var(--warn)"
+         : "var(--panel-3)";
+  }
+  function renderStrip(hostId, points) {
+    const host = document.getElementById(hostId);
+    if (!host || !points.length) return;
+    const w = host.clientWidth || 800;
+    const h = 60;
+    const step = w / points.length;
+    const parts = [`<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:${h}px;">`];
+    points.forEach((p, i) => {
+      const x = i * step;
+      parts.push(`<rect x="${x}" y="0" width="${step + 0.5}" height="${h}" fill="${stripColor(p.cls)}" opacity="0.85"><title>${p.date} · ${p.cls}</title></rect>`);
+    });
+    parts.push(`</svg>`);
+    host.innerHTML = parts.join("");
+  }
+
+  // ---- View toggle ------------------------------------------
+  const gridEl = $("viewGrid");
+  const visEl  = $("viewVisual");
+  let visualLoaded = false;
+
+  $$("#viewChips .chip").forEach((c) => c.addEventListener("click", () => {
+    $$("#viewChips .chip").forEach((x) => x.classList.remove("active"));
+    c.classList.add("active");
+    const mode = c.dataset.view;
+    gridEl.style.display = mode === "grid" ? "" : "none";
+    visEl.style.display  = mode === "visual" ? "" : "none";
+    if (mode === "visual" && !visualLoaded) { loadVisual(); visualLoaded = true; }
+    if (mode === "visual") setTimeout(() => window.dispatchEvent(new Event("resize")), 100);
+  }));
+
+  // Reload visual when days changes
+  $("fvDays")?.addEventListener("change", () => { if (visualLoaded) loadVisual(); });
+
+  // v2 ticker switch → /v2/time-series/{ticker}. Uses the same autocomplete.js
+  // widget as the legacy pages, wired to v2 URLs.
+  // /api/tickers returns [{ticker, sector}, ...]. attachTickerSearch expects
+  // that shape directly; the fallback keydown handler below just needs strings,
+  // so keep both forms available.
+  let _allTix = [];      // object form, for autocomplete widget
+  let _allTixStr = [];   // string form, for fallback keydown handler
+  fetch("/api/tickers").then((r) => r.json()).then((d) => {
+    _allTix = d.tickers || [];
+    _allTixStr = _allTix.map((x) => typeof x === "string" ? x : x.ticker);
+  });
+  const switchInput = $("tsSwitchInput");
+  const switchResults = $("tsSwitchResults");
+  if (window.attachTickerSearch && switchInput && switchResults) {
+    window.attachTickerSearch(
+      switchInput, switchResults, () => _allTix,
+      (t) => { window.location.href = `/v2/time-series/${encodeURIComponent(t)}`; },
+    );
+  } else if (switchInput) {
+    // Fallback if autocomplete.js didn't load — plain Enter-to-navigate.
+    switchInput.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const q = e.target.value.trim().toUpperCase();
+      const hit = _allTixStr.includes(q) ? q : _allTixStr.find((x) => x.startsWith(q));
+      if (hit) window.location.href = `/v2/time-series/${hit}`;
+    });
+  }
+</script>
+{% endblock %}

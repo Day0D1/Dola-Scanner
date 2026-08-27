@@ -1,0 +1,18 @@
+<nav class="bottom-nav" aria-label="Mobile navigation">
+  <div class="bottom-nav-inner">
+    {% set bn_items = [
+      ("overview",    "/v2/",             "Overview",  "M3 12l2-2 7-7 7 7 2 2M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10"),
+      ("scanner",     "/v2/scanner",      "Scanner",   "M11 4a7 7 0 100 14 7 7 0 000-14zM21 21l-5-5"),
+      ("alerts",      "/v2/alerts",       "Alerts",    "M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"),
+      ("watchlists",  "/v2/watchlists",   "Lists",     "M11 5l-7 7 7 7M4 12h16"),
+    ] %}
+    {% for key, href, label, path in bn_items %}
+    <a href="{{ href }}" class="bn-item{% if current_page == key %} active{% endif %}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="{{ path }}"></path>
+      </svg>
+      <span>{{ label }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</nav>
