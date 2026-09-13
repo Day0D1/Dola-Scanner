@@ -1,0 +1,126 @@
+/* Universal Chart Settings modal — standalone styles.
+   Works on any page (legacy dashboard OR v2 shell). Every custom property has
+   a hex fallback so pages that don't define the v2 tokens still render cleanly.
+   Class prefix "cs-" is unique enough to avoid collision with either stylesheet. */
+
+.cs-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 40;
+  animation: csFade 120ms ease-out;
+}
+.cs-modal {
+  position: fixed;
+  z-index: 50;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  display: flex; flex-direction: column;
+  background: var(--panel, var(--surface-1, #0D141D));
+  border: 1px solid var(--border-2, var(--hairline-strong, rgba(255,255,255,0.10)));
+  border-radius: var(--r-lg, 10px);
+  box-shadow: 0 24px 60px -16px rgba(0,0,0,0.65);
+  animation: csIn 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  color: var(--ink, #eef1f7);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+.cs-modal[hidden], .cs-backdrop[hidden] { display: none !important; }
+
+.cs-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border, var(--hairline, rgba(255,255,255,0.06)));
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.cs-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink, #eef1f7); }
+.cs-sub   { font-size: 11px; color: var(--ink-3, #6a7690); margin-top: 2px; }
+.cs-close-btn {
+  color: var(--ink-3, #6a7690);
+  font-size: 22px; line-height: 1;
+  padding: 4px 8px;
+  border: 0; background: none; cursor: pointer;
+  border-radius: 6px;
+  transition: color 120ms ease-out, background 120ms ease-out;
+}
+.cs-close-btn:hover { color: var(--ink, #eef1f7); background: var(--panel-2, var(--surface-2, #111A24)); }
+
+.cs-tabs {
+  display: flex; gap: 2px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border, var(--hairline, rgba(255,255,255,0.06)));
+}
+.cs-tab {
+  padding: 8px 16px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--ink-3, #6a7690);
+  border: 0; background: none; cursor: pointer;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  font-family: inherit;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+.cs-tab:hover { color: var(--ink, #eef1f7); background: var(--panel-2, var(--surface-2, #111A24)); }
+.cs-tab.active { color: var(--ink, #eef1f7); border-bottom-color: var(--accent, #5b9bff); }
+
+.cs-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+.cs-section { margin-bottom: 20px; }
+.cs-section:last-child { margin-bottom: 0; }
+.cs-section-title {
+  font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase;
+  color: var(--ink-3, #6a7690); font-weight: 700; margin-bottom: 12px;
+}
+.cs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.cs-field {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ink-2, #a3adc2);
+}
+.cs-field input[type="number"] {
+  background: var(--panel-2, var(--surface-2, #111A24));
+  border: 1px solid var(--border-2, var(--hairline-strong, rgba(255,255,255,0.10)));
+  border-radius: 6px;
+  color: var(--ink, #eef1f7);
+  padding: 6px 8px;
+  font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 120ms ease-out;
+  width: 100%;
+  box-sizing: border-box;
+}
+.cs-field input[type="number"]:focus { border-color: var(--accent, #5b9bff); }
+.cs-field input[type="color"] {
+  height: 32px; width: 100%;
+  background: var(--panel-2, var(--surface-2, #111A24));
+  border: 1px solid var(--border-2, var(--hairline-strong, rgba(255,255,255,0.10)));
+  border-radius: 6px;
+  padding: 2px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.cs-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.cs-field input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
+
+.cs-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border, var(--hairline, rgba(255,255,255,0.06)));
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--bg-2, var(--bg, #0F1721));
+  border-radius: 0 0 var(--r-lg, 10px) var(--r-lg, 10px);
+}
+.cs-footer .row-3 { display: flex; align-items: center; gap: 12px; }
+
+@keyframes csFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes csIn   {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@media (max-width: 640px) {
+  .cs-modal { width: calc(100vw - 16px); max-height: calc(100vh - 24px); }
+}

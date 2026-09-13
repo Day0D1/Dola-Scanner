@@ -24,13 +24,13 @@ RSI_OVERBOUGHT = 70.0
 # of zone. The entry then fires on the P&F flip, alert prints the current RSI.
 CANDIDATE_LOOKBACK_DAYS = 60
 
-PNF_BOX_PCT = 1.0
-PNF_REVERSAL = 3
+PNF_BOX_PCT = 2.0
+PNF_REVERSAL = 2
 
 # VIX uses TRADITIONAL scaling (fixed-point box) since its natural range is
 # small and bounded — 1-point boxes are more intuitive than percentage.
 VIX_PNF_BOX_SIZE = 1.0
-VIX_PNF_REVERSAL = 2
+VIX_PNF_REVERSAL = 3
 
 # What signal side(s) to surface to the user (dashboard + Telegram):
 #   "puts_only"  = only ELON candidates and SELL_PUTS entries

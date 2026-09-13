@@ -907,12 +907,80 @@ h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: 600; }
   text-align: center;
   font-family: var(--f-mono);
 }
+/* Excel-like scroll region — expansive, both scrollbars always visible when
+   needed, smooth cursor scroll, prominent thumb so it stops feeling boxed. */
 .fv-scroll {
   overflow: auto;
-  max-height: calc(100vh - 260px);
-  min-height: 380px;
+  max-height: calc(100vh - 180px);
+  min-height: 480px;
   overscroll-behavior: contain;
   border-radius: calc(var(--r-md) - 4px);
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable both-edges;
+  position: relative;   /* anchors the crosshair overlay divs */
+  cursor: crosshair;    /* the whole grid reads as trackable */
+}
+/* Crosshair overlay — two dashed lines that follow the pointer across the
+   grid, plus a small price tag. Positioned absolutely inside .fv-scroll so
+   they stay pinned to the viewport while the user pans. Hidden by default;
+   fair_value.js updates their coords on mousemove and reveals them. */
+.fv-xhair-v, .fv-xhair-h {
+  position: absolute;
+  background: none;
+  border: 0;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.fv-xhair-v {
+  top: 0; bottom: 0; width: 0;
+  border-left: 1px dashed rgba(91, 155, 255, 0.8);
+}
+.fv-xhair-h {
+  left: 0; right: 0; height: 0;
+  border-top: 1px dashed rgba(91, 155, 255, 0.8);
+}
+.fv-xhair-tag {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+  padding: 2px 6px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--panel-2);
+  border: 1px solid rgba(91, 155, 255, 0.5);
+  border-radius: 3px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.fv-scroll.xhair-on .fv-xhair-v,
+.fv-scroll.xhair-on .fv-xhair-h,
+.fv-scroll.xhair-on .fv-xhair-tag { opacity: 1; }
+/* Beefier scrollbars for the fv grid so it feels like a spreadsheet, not a widget */
+.fv-scroll::-webkit-scrollbar { width: 14px; height: 14px; }
+.fv-scroll::-webkit-scrollbar-track { background: var(--bg-2); }
+.fv-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border: 3px solid var(--bg-2);
+  border-radius: var(--r-pill);
+}
+.fv-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+.fv-scroll::-webkit-scrollbar-corner { background: var(--bg-2); }
+
+/* Row + column hover highlight — the single most Excel-like affordance.
+   When you hover any body cell, its column (all cells at that x-index) and
+   its row (all cells at that y-index) glow softly so you can trace values
+   even when the grid is dense. */
+.fv-table tbody tr:hover { background: rgba(91, 155, 255, 0.05); }
+.fv-table tbody td:hover,
+.fv-table tbody th.fv-pricelabel:hover {
+  outline: 1px solid rgba(91, 155, 255, 0.4);
+  outline-offset: -1px;
 }
 .fv-table {
   border-collapse: separate;
@@ -1008,6 +1076,135 @@ h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: 600; }
 .fv-swatch.close-on-upper { background: #e879f9; }
 .fv-swatch.close-on-lower { background: #f97316; }
 .fv-swatch.close-on-mid   { background: #22d3ee; }
+
+/* ============================================================
+   Universal chart settings modal
+   Opened from the topbar cog. Persists overrides for candlestick + P&F
+   indicator params and colors. Index tickers (SPX/VIX/BPNYA) intentionally
+   ignore these overrides — see chart_settings.js.
+   ============================================================ */
+
+.cs-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: var(--z-modal-bg);
+  animation: csFade var(--dur-fast) var(--ease);
+}
+.cs-modal {
+  position: fixed;
+  z-index: var(--z-modal);
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  animation: csIn var(--dur-med) var(--ease);
+}
+.cs-header {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3);
+}
+.cs-title { font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; }
+.cs-sub   { font-size: var(--fs-xs); color: var(--ink-3); margin-top: 2px; }
+.cs-close-btn {
+  color: var(--ink-3);
+  font-size: 22px; line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+}
+.cs-close-btn:hover { color: var(--ink); background: var(--panel-2); }
+
+.cs-tabs {
+  display: flex;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-4) 0;
+  border-bottom: 1px solid var(--border);
+}
+.cs-tab {
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.cs-tab:hover { color: var(--ink); background: var(--panel-2); }
+.cs-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+
+.cs-body {
+  padding: var(--sp-4) var(--sp-5);
+  overflow-y: auto;
+  flex: 1;
+}
+.cs-section { margin-bottom: var(--sp-5); }
+.cs-section:last-child { margin-bottom: 0; }
+.cs-section-title {
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 700;
+  margin-bottom: var(--sp-3);
+}
+.cs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--sp-3);
+}
+.cs-field {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.cs-field input[type="number"] {
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  padding: 6px 8px;
+  font-family: var(--f-mono);
+  font-size: var(--fs-sm);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.cs-field input[type="number"]:focus { border-color: var(--accent); }
+.cs-field input[type="color"] {
+  height: 32px; width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  padding: 2px;
+  cursor: pointer;
+}
+.cs-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.cs-field input[type="color"]::-webkit-color-swatch { border: none; border-radius: var(--r-xs); }
+
+.cs-footer {
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-3);
+  background: var(--bg-2);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+
+@keyframes csFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes csIn   {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@media (max-width: 640px) {
+  .cs-modal { width: calc(100vw - 16px); max-height: calc(100vh - 24px); }
+}
 
 /* Notification dot on topbar bell (placeholder — future) */
 .notif-dot {

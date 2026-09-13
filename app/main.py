@@ -174,16 +174,13 @@ def _run_scan_sync(notify: bool = True) -> None:
                     signals.append(sig)
         signals.sort(key=lambda s: s.ticker)
 
-        # Compute today's $BPNYA from freshly-computed P&F states.
-        pnf_scored = [s for s in signals if s.pnf_column in ("X", "O")]
-        if pnf_scored:
-            x_count = sum(1 for s in pnf_scored if s.pnf_column == "X")
-            today_pct = round(100.0 * x_count / len(pnf_scored), 2)
-            today_iso = dt.date.today().isoformat()
-            try:
-                store.upsert_bpnya(today_iso, today_pct, len(pnf_scored))
-            except Exception as e:  # noqa: BLE001
-                print(f"[scan] BPNYA upsert failed: {e}")
+        # BPNYA is now sourced from the user's daily CSV import + daily-entry
+        # form (both marked source='import' or 'manual'). The scanner's own
+        # ~333-stock X% metric diverged materially from the real NYSE Bullish
+        # Percent Index (~2,400 stocks) and was overwriting weekend rows with
+        # stale values. Reading breadth below falls back to the last imported
+        # row when today is not yet entered, which is the correct behavior
+        # until the user posts today's OHLC.
 
         # Now read breadth (uses the fresh BPNYA point we just stored).
         breadth = read_breadth()
@@ -644,21 +641,35 @@ _INDEX_KEYS = {
     },
     "BPNYA": {
         "source": "internal_bpnya", "symbol": None,
-        "chart_type": "line", "pnf_type": "traditional",
+        # Rendered as candlestick to match StockCharts now that we store real
+        # OHLC (via CSV import + daily manual entry). The internal series
+        # provides open/high/low for every day; when a row is missing OHL (old
+        # pre-schema rows), _bpnya_series_as_ohlc falls back to open=high=low=close.
+        "chart_type": "candlestick", "pnf_type": "traditional",
         "display_name": "$BPNYA - NYSE Bullish Percent (self-computed)",
     },
 }
 
 
 def _bpnya_series_as_ohlc() -> pd.DataFrame:
-    """Now returns REAL OHLC when the row has open/high/low; falls back to
-    open=high=low=close for older rows that only stored the close pct.
+    """Return BPNYA history as an OHLC DataFrame.
+
+    Prefers the real Open/High/Low columns from the DB (populated via CSV
+    import and the daily-entry form). When a legacy row only has close, falls
+    back to open=high=low=close so the candlestick renderer still draws a
+    valid one-tick candle for that day instead of NaN-ing out.
     """
     history = store.get_bpnya_history_ohlc()
     if not history:
         return pd.DataFrame()
+    rows = []
+    for d, o, h, l, c in history:
+        o_v = float(o) if o is not None else float(c)
+        h_v = float(h) if h is not None else float(c)
+        l_v = float(l) if l is not None else float(c)
+        rows.append((pd.Timestamp(d).date(), o_v, h_v, l_v, float(c), 0))
     df = pd.DataFrame(
-        [(pd.Timestamp(d).date(), o, h, l, c, 0) for d, o, h, l, c in history],
+        rows,
         columns=["date", "open", "high", "low", "close", "volume"],
     ).set_index("date")
     return df

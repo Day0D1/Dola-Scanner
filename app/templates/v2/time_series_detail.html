@@ -38,6 +38,14 @@
     <button id="fvZoomIn"  class="btn ghost sm" title="Show fewer days">+</button>
     <a id="fvExport" class="btn primary sm" href="#">Export Excel</a>
     <button id="fvRefresh" class="btn ghost sm">Refresh</button>
+    <button type="button" class="btn ghost sm" id="tsSettingsBtn"
+            title="Time Series colors" aria-label="Time Series colors"
+            onclick="window.openTsSettings && window.openTsSettings()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>
+      </svg>Colors
+    </button>
     <a href="/v2/charts/{{ ticker }}" class="btn ghost sm">Chart</a>
     <!-- fvSearchInput/fvSearchResults are legacy IDs used by fair_value.js; hidden here since the visible tsSwitchInput above routes to v2 URLs -->
     <input id="fvSearchInput" type="hidden" />
@@ -102,7 +110,10 @@
 <!-- Legacy grid renderer, reused as-is (works standalone on window.FV_TICKER). -->
 <script>window.FV_TICKER = "{{ ticker }}";</script>
 <script src="/static/autocomplete.js?v={{ asset_v }}"></script>
+<script type="module" src="/static/ts_settings.js?v={{ asset_v }}"></script>
 <script src="/static/fair_value.js?v={{ asset_v }}"></script>
+
+{% include "_ts_settings_modal.html" %}
 
 <script type="module">
   import { api, fmt, el, $, $$ } from "/static/v2/shared.js?v={{ asset_v }}";
@@ -122,9 +133,16 @@
       const P = palette;
       const commonX = {
         gridcolor: P.grid(), zerolinecolor: P.grid(),
-        type: "date", tickformat: "%b %d", hoverformat: "%b %d, %Y",
+        type: "date", tickformat: "%m/%d/%y", hoverformat: "%m/%d/%y",
         tickfont: { color: P.ink3() },
-        showspikes: true, spikemode: "across", spikecolor: P.accent(),
+        showspikes: true, spikemode: "across+marker", spikecolor: P.accent(),
+        spikethickness: 1.2, spikedash: "dot", spikesnap: "cursor",
+      };
+      const commonY = {
+        gridcolor: P.grid(), zerolinecolor: P.grid(), side: "right",
+        tickfont: { color: P.ink3() },
+        showspikes: true, spikemode: "across+marker", spikecolor: P.accent(),
+        spikethickness: 1.2, spikedash: "dot", spikesnap: "cursor",
       };
       const layoutBase = {
         dragmode: "pan",
@@ -150,7 +168,7 @@
       ], {
         ...layoutBase,
         xaxis: commonX,
-        yaxis: { side: "right", gridcolor: P.grid(), tickfont: { color: P.ink3() } },
+        yaxis: commonY,
       }, { displayModeBar: false, responsive: true, scrollZoom: true });
 
       // RSI
@@ -163,8 +181,7 @@
       ], {
         ...layoutBase,
         xaxis: commonX,
-        yaxis: { side: "right", gridcolor: P.grid(), range: [0, 100],
-                 tickvals: [rsiLo, 50, rsiHi], tickfont: { color: P.ink3() } },
+        yaxis: { ...commonY, range: [0, 100], tickvals: [rsiLo, 50, rsiHi] },
         shapes: [
           { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: rsiLo, y1: rsiLo,
             line: { color: P.bull(), width: 1, dash: "dash" }, opacity: 0.5 },
@@ -184,7 +201,7 @@
       ], {
         ...layoutBase,
         xaxis: commonX,
-        yaxis: { side: "right", gridcolor: P.grid(), tickfont: { color: P.ink3() } },
+        yaxis: commonY,
       }, { displayModeBar: false, responsive: true, scrollZoom: true });
 
       // Regime + Risk strips (custom SVG segmentation)

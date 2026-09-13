@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css?v={{ asset_v }}" />
+  <link rel="stylesheet" href="/static/chart_settings.css?v={{ asset_v }}" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 <body>
@@ -21,6 +22,14 @@
       <span id="modeBadge" class="mode-badge hidden"></span>
       <a href="/performance" class="btn ghost">Performance</a>
       <a href="/history" class="btn ghost">History</a>
+      <button type="button" class="btn ghost" id="chartSettingsBtn"
+              title="Chart settings — colors, indicators (indices exempt)"
+              onclick="window.openChartSettings && window.openChartSettings()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>
+        </svg>Chart Settings
+      </button>
       <div class="scan-times">
         <span id="scanTime" class="scan-time">–</span>
         <span id="nextScan" class="scan-time next">next auto-scan: –</span>
@@ -205,6 +214,8 @@
       </div>
     </div>
   </div>
+
+  {% include "_chart_settings_modal.html" %}
 
   <script src="/static/autocomplete.js?v={{ asset_v }}"></script>
   <script src="/static/app.js?v={{ asset_v }}"></script>

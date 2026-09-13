@@ -1,0 +1,163 @@
+<div id="tsSettingsBackdrop" class="cs-backdrop" hidden data-ts-close></div>
+<div id="tsSettingsModal" class="cs-modal" hidden role="dialog" aria-modal="true" aria-labelledby="tsTitle">
+  <div class="cs-header">
+    <div>
+      <div id="tsTitle" class="cs-title">Time Series colors</div>
+      <div class="cs-sub">Applies to every time series chart (H/L/F markers, close cells, range highlight).</div>
+    </div>
+    <button class="cs-close-btn" data-ts-close aria-label="Close">&times;</button>
+  </div>
+
+  <div class="cs-body">
+    <div class="cs-section">
+      <div class="cs-section-title">Bollinger markers</div>
+      <div class="cs-grid">
+        <label class="cs-field">HBB (H — upper)
+          <input type="color" data-ts="hbb_bg" />
+        </label>
+        <label class="cs-field">FBB (F — middle / fair value)
+          <input type="color" data-ts="fbb_bg" />
+        </label>
+        <label class="cs-field">LBB (L — lower)
+          <input type="color" data-ts="lbb_bg" />
+        </label>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <div class="cs-section-title">Close markers</div>
+      <div class="cs-grid">
+        <label class="cs-field">Close (standalone)
+          <input type="color" data-ts="close_bg" />
+        </label>
+        <label class="cs-field">Close at / above UBB
+          <input type="color" data-ts="close_on_upper_bg" />
+        </label>
+        <label class="cs-field">Close at / below LBB
+          <input type="color" data-ts="close_on_lower_bg" />
+        </label>
+        <label class="cs-field">Close at fair value
+          <input type="color" data-ts="close_on_mid_bg" />
+        </label>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <div class="cs-section-title">Header rows</div>
+      <div class="cs-grid">
+        <label class="cs-field">BOL-H row tint
+          <input type="color" data-ts="bol_h_bg" data-ts-mode="hex-alpha" />
+        </label>
+        <label class="cs-field">BOL-L row tint
+          <input type="color" data-ts="bol_l_bg" data-ts-mode="hex-alpha" />
+        </label>
+        <label class="cs-field">Intraday range
+          <input type="color" data-ts="range_bg" data-ts-mode="hex-alpha" />
+        </label>
+        <label class="cs-field">RSI oversold tint
+          <input type="color" data-ts="rsi_lo_bg" data-ts-mode="hex-alpha" />
+        </label>
+        <label class="cs-field">RSI overbought tint
+          <input type="color" data-ts="rsi_hi_bg" data-ts-mode="hex-alpha" />
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="cs-footer">
+    <button id="tsReset" class="btn ghost">Reset to defaults</button>
+    <div class="row-3">
+      <button class="btn ghost" data-ts-close>Cancel</button>
+      <button id="tsApply" class="btn primary">Save &amp; apply</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { getTsSettings, saveTsSettings, resetTsSettings, DEFAULTS } from "/static/ts_settings.js?v={{ asset_v }}";
+
+  const backdrop = document.getElementById("tsSettingsBackdrop");
+  const modal    = document.getElementById("tsSettingsModal");
+
+  // Some persisted values are rgba (with 0.7 alpha) so the header-row tints
+  // still let the surface-2 background bleed through. <input type="color">
+  // can only round-trip hex — for those fields, we show the underlying hex in
+  // the picker and re-wrap the new value in the same alpha on save.
+  function rgbaToHex(rgba) {
+    const m = /^rgba?\(([0-9.\s,]+)\)$/.exec(rgba || "");
+    if (!m) return null;
+    const parts = m[1].split(",").map((x) => parseFloat(x.trim()));
+    if (parts.length < 3) return null;
+    const hex = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+    return { hex: "#" + hex(parts[0]) + hex(parts[1]) + hex(parts[2]), alpha: parts[3] ?? 1 };
+  }
+  function hexToRgba(hex, alpha) {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  }
+
+  const alphaByField = {};   // remember the original alpha for hex-alpha fields
+
+  function fillForm(settings) {
+    modal.querySelectorAll("[data-ts]").forEach((el) => {
+      const key = el.dataset.ts;
+      const val = settings[key];
+      if (val == null) return;
+      if (el.dataset.tsMode === "hex-alpha") {
+        const parsed = rgbaToHex(val);
+        if (parsed) {
+          el.value = parsed.hex;
+          alphaByField[key] = parsed.alpha;
+        } else if (/^#[0-9a-f]{6}$/i.test(val)) {
+          el.value = val;
+          alphaByField[key] = 1;
+        }
+      } else if (/^#[0-9a-f]{6}$/i.test(val)) {
+        el.value = val;
+      }
+    });
+  }
+
+  function collect() {
+    const patch = {};
+    modal.querySelectorAll("[data-ts]").forEach((el) => {
+      const key = el.dataset.ts;
+      const raw = el.value;
+      if (el.dataset.tsMode === "hex-alpha") {
+        patch[key] = hexToRgba(raw, alphaByField[key] ?? 0.7);
+      } else {
+        patch[key] = raw;
+      }
+    });
+    return patch;
+  }
+
+  function open() {
+    fillForm(getTsSettings());
+    backdrop.hidden = false;
+    modal.hidden = false;
+    const first = modal.querySelector("input");
+    if (first) first.focus();
+  }
+  function close() {
+    backdrop.hidden = true;
+    modal.hidden = true;
+  }
+
+  document.getElementById("tsApply").addEventListener("click", () => {
+    saveTsSettings(collect());
+    close();
+  });
+  document.getElementById("tsReset").addEventListener("click", () => {
+    resetTsSettings();
+    fillForm(DEFAULTS);
+  });
+  modal.addEventListener("click", (e) => { if (e.target.matches("[data-ts-close]")) close(); });
+  backdrop.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) close(); });
+
+  window.openTsSettings = open;
+  fillForm(getTsSettings());
+</script>

@@ -976,14 +976,14 @@ button { -webkit-tap-highlight-color: transparent; }
   width: 22px; height: 16px; border-radius: 3px; margin-right: 4px;
   font-size: 10px; font-weight: 700; color: white;
 }
-.fv-legend .fv-swatch.bb-upper { background: #ef4444; color: white; }
-.fv-legend .fv-swatch.bb-lower { background: #22c55e; color: white; }
-.fv-legend .fv-swatch.bb-middle{ background: #fbbf24; color: #111; }
-.fv-legend .fv-swatch.range    { background: rgba(59, 130, 246, 0.3); }
-.fv-legend .fv-swatch.close    { background: #ffffff; color: #0b0d12; }
-.fv-legend .fv-swatch.close-on-upper { background: #e879f9; }
-.fv-legend .fv-swatch.close-on-lower { background: #f97316; }
-.fv-legend .fv-swatch.close-on-mid   { background: #22d3ee; }
+.fv-legend .fv-swatch.bb-upper { background: var(--ts-hbb-bg, #22c55e); color: var(--ts-hbb-fg, white); }
+.fv-legend .fv-swatch.bb-lower { background: var(--ts-lbb-bg, #ef4444); color: var(--ts-lbb-fg, white); }
+.fv-legend .fv-swatch.bb-middle{ background: var(--ts-fbb-bg, #fbbf24); color: var(--ts-fbb-fg, #111); }
+.fv-legend .fv-swatch.range    { background: var(--ts-range-bg, rgba(59, 130, 246, 0.3)); }
+.fv-legend .fv-swatch.close    { background: var(--ts-close-bg, #ffffff); color: var(--ts-close-fg, #0b0d12); }
+.fv-legend .fv-swatch.close-on-upper { background: var(--ts-close-on-upper-bg, #ef4444); color: var(--ts-close-on-upper-fg, #ffffff); }
+.fv-legend .fv-swatch.close-on-lower { background: var(--ts-close-on-lower-bg, #00e676); color: var(--ts-close-on-lower-fg, #0b0d12); }
+.fv-legend .fv-swatch.close-on-mid   { background: var(--ts-close-on-mid-bg, #22d3ee); color: var(--ts-close-on-mid-fg, #0b0d12); }
 .fv-legend .fv-swatch + span { margin-left: var(--sp-2); }
 
 .fv-container {
@@ -993,6 +993,38 @@ button { -webkit-tap-highlight-color: transparent; }
   padding: var(--sp-2);
   --fv-cell-w: 44px;
   --fv-font-size: 11px;
+
+  /* Time-series color tokens — overridable via the Time Series Settings modal
+     (ts_settings.js writes to these on the container). Defaults below match
+     the palette the user picked: HBB green, LBB red, close-above-UBB red,
+     close-below-LBB bright green.
+     The freeze-cascade animation writes to --fv-row-h and --fv-head-scale so
+     the sticky header rows shrink as you scroll deeper into the grid. */
+  --fv-row-h: 22px;
+  --fv-head-scale: 1;
+
+  --ts-hbb-bg: #22c55e;
+  --ts-hbb-fg: #ffffff;
+  --ts-lbb-bg: #ef4444;
+  --ts-lbb-fg: #ffffff;
+  --ts-fbb-bg: #fbbf24;
+  --ts-fbb-fg: #111827;
+
+  --ts-bol-h-bg: rgba(34, 197, 94, 0.7);
+  --ts-bol-l-bg: rgba(239, 68, 68, 0.7);
+
+  --ts-close-bg: #ffffff;
+  --ts-close-fg: #0b0d12;
+  --ts-close-on-upper-bg: #ef4444;
+  --ts-close-on-upper-fg: #ffffff;
+  --ts-close-on-lower-bg: #00e676;
+  --ts-close-on-lower-fg: #0b0d12;
+  --ts-close-on-mid-bg: #22d3ee;
+  --ts-close-on-mid-fg: #0b0d12;
+
+  --ts-range-bg: rgba(59, 130, 246, 0.3);
+  --ts-rsi-lo-bg: rgba(34, 197, 94, 0.28);
+  --ts-rsi-hi-bg: rgba(239, 68, 68, 0.28);
 }
 .fv-loading { padding: var(--sp-6); color: var(--ink-3); text-align: center; font-family: var(--f-mono); }
 
@@ -1006,6 +1038,61 @@ button { -webkit-tap-highlight-color: transparent; }
   min-height: 400px;
   overscroll-behavior: contain;
   border-radius: calc(var(--r-md) - 4px);
+  position: relative;   /* anchors the crosshair overlay divs */
+  cursor: crosshair;    /* the whole grid reads as trackable */
+  scroll-behavior: smooth;
+}
+
+/* Crosshair overlay — two dashed lines that follow the pointer, plus a price
+   tag. Absolutely positioned inside .fv-scroll so they stay in the viewport
+   while the user pans. Hidden until the mouse enters. */
+.fv-xhair-v, .fv-xhair-h {
+  position: absolute;
+  background: none;
+  border: 0;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.fv-xhair-v {
+  top: 0; bottom: 0; width: 0;
+  border-left: 1px dashed rgba(76, 141, 255, 0.8);
+}
+.fv-xhair-h {
+  left: 0; right: 0; height: 0;
+  border-top: 1px dashed rgba(76, 141, 255, 0.8);
+}
+.fv-xhair-tag {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+  padding: 2px 6px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #e6e8ec;
+  background: var(--surface-2);
+  border: 1px solid rgba(76, 141, 255, 0.5);
+  border-radius: 3px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.fv-scroll.xhair-on .fv-xhair-v,
+.fv-scroll.xhair-on .fv-xhair-h,
+.fv-scroll.xhair-on .fv-xhair-tag { opacity: 1; }
+
+/* Fluidity: cell hover feedback — subtle glow so the grid feels responsive
+   like the candlestick chart, not like a static spreadsheet. */
+.fv-table tbody td, .fv-table tbody th.fv-pricelabel {
+  transition: background 90ms ease-out, box-shadow 90ms ease-out;
+}
+.fv-table tbody tr:hover { background: rgba(76, 141, 255, 0.05); }
+.fv-table tbody td:hover,
+.fv-table tbody th.fv-pricelabel:hover {
+  box-shadow: inset 0 0 0 1px rgba(76, 141, 255, 0.5);
 }
 
 .fv-table { border-collapse: separate; border-spacing: 0; font-family: var(--f-mono); font-size: var(--fv-font-size); }
@@ -1031,25 +1118,30 @@ button { -webkit-tap-highlight-color: transparent; }
 /* Freeze the TOP — every cell in every thead row (DATE through RISK) stays
    fixed while vertical scroll. Applies to both <th> row-labels and <td> per-day
    cells; default surface-2 bg for cells that don't already have a colored bg.
-   Each row gets a progressive `top` offset (var(--row-h) × index) so the 10
-   header rows stack vertically instead of collapsing onto a single line. */
-.fv-table { --row-h: 22px; }
+   Each row gets a progressive `top` offset (var(--fv-row-h) × index) so the 10
+   header rows stack vertically instead of collapsing onto a single line.
+   --fv-row-h is animated by fair_value.js on scroll to cascade/collapse the
+   sticky header block as the user scrolls deeper — this reveals more price
+   rows without needing to un-freeze the header. */
 .fv-table thead th,
 .fv-table thead td {
   position: sticky;
   z-index: 2;
   background: var(--surface-2);
+  height: var(--fv-row-h, 22px);
+  line-height: 1;
+  transition: height 120ms ease-out, font-size 120ms ease-out, padding 120ms ease-out;
 }
-.fv-table thead tr:nth-child(1)  > * { top: calc(var(--row-h) * 0); }
-.fv-table thead tr:nth-child(2)  > * { top: calc(var(--row-h) * 1); }
-.fv-table thead tr:nth-child(3)  > * { top: calc(var(--row-h) * 2); }
-.fv-table thead tr:nth-child(4)  > * { top: calc(var(--row-h) * 3); }
-.fv-table thead tr:nth-child(5)  > * { top: calc(var(--row-h) * 4); }
-.fv-table thead tr:nth-child(6)  > * { top: calc(var(--row-h) * 5); }
-.fv-table thead tr:nth-child(7)  > * { top: calc(var(--row-h) * 6); }
-.fv-table thead tr:nth-child(8)  > * { top: calc(var(--row-h) * 7); }
-.fv-table thead tr:nth-child(9)  > * { top: calc(var(--row-h) * 8); }
-.fv-table thead tr:nth-child(10) > * { top: calc(var(--row-h) * 9); }
+.fv-table thead tr:nth-child(1)  > * { top: calc(var(--fv-row-h, 22px) * 0); }
+.fv-table thead tr:nth-child(2)  > * { top: calc(var(--fv-row-h, 22px) * 1); }
+.fv-table thead tr:nth-child(3)  > * { top: calc(var(--fv-row-h, 22px) * 2); }
+.fv-table thead tr:nth-child(4)  > * { top: calc(var(--fv-row-h, 22px) * 3); }
+.fv-table thead tr:nth-child(5)  > * { top: calc(var(--fv-row-h, 22px) * 4); }
+.fv-table thead tr:nth-child(6)  > * { top: calc(var(--fv-row-h, 22px) * 5); }
+.fv-table thead tr:nth-child(7)  > * { top: calc(var(--fv-row-h, 22px) * 6); }
+.fv-table thead tr:nth-child(8)  > * { top: calc(var(--fv-row-h, 22px) * 7); }
+.fv-table thead tr:nth-child(9)  > * { top: calc(var(--fv-row-h, 22px) * 8); }
+.fv-table thead tr:nth-child(10) > * { top: calc(var(--fv-row-h, 22px) * 9); }
 
 /* Corner cells (thead row-labels) sit above BOTH the sticky row and column at
    their intersection so nothing peeks through as you scroll diagonally. */
@@ -1060,19 +1152,19 @@ button { -webkit-tap-highlight-color: transparent; }
 .fv-table td.col-o { color: var(--bear); font-weight: 700; }
 .fv-table td.change-pos { color: var(--bull); }
 .fv-table td.change-neg { color: var(--bear); }
-.fv-table td.rsi-lo { background: rgba(34, 197, 94, 0.28); color: white; font-weight: 700; }
-.fv-table td.rsi-hi { background: rgba(239, 68, 68, 0.28); color: white; font-weight: 700; }
-.fv-table td.bol-h { background: rgba(239, 68, 68, 0.7); color: white; font-weight: 700; }
-.fv-table td.bol-l { background: rgba(34, 197, 94, 0.7); color: white; font-weight: 700; }
+.fv-table td.rsi-lo { background: var(--ts-rsi-lo-bg, rgba(34, 197, 94, 0.28)); color: white; font-weight: 700; }
+.fv-table td.rsi-hi { background: var(--ts-rsi-hi-bg, rgba(239, 68, 68, 0.28)); color: white; font-weight: 700; }
+.fv-table td.bol-h  { background: var(--ts-bol-h-bg, rgba(34, 197, 94, 0.7)); color: white; font-weight: 700; }
+.fv-table td.bol-l  { background: var(--ts-bol-l-bg, rgba(239, 68, 68, 0.7)); color: white; font-weight: 700; }
 
-.fv-table td.range        { background: rgba(59, 130, 246, 0.3); }
-.fv-table td.bb-upper     { background: #ef4444; color: #ffffff; font-weight: 900; }
-.fv-table td.bb-lower     { background: #22c55e; color: #ffffff; font-weight: 900; }
-.fv-table td.bb-middle    { background: #fbbf24; color: #111827; font-weight: 900; }
-.fv-table td.close        { background: #ffffff; color: #0b0d12; font-weight: 900; }
-.fv-table td.close-on-upper { background: #e879f9; color: #0b0d12; font-weight: 900; }
-.fv-table td.close-on-lower { background: #f97316; color: #0b0d12; font-weight: 900; }
-.fv-table td.close-on-mid   { background: #22d3ee; color: #0b0d12; font-weight: 900; }
+.fv-table td.range          { background: var(--ts-range-bg, rgba(59, 130, 246, 0.3)); }
+.fv-table td.bb-upper       { background: var(--ts-hbb-bg, #22c55e); color: var(--ts-hbb-fg, #ffffff); font-weight: 900; }
+.fv-table td.bb-lower       { background: var(--ts-lbb-bg, #ef4444); color: var(--ts-lbb-fg, #ffffff); font-weight: 900; }
+.fv-table td.bb-middle      { background: var(--ts-fbb-bg, #fbbf24); color: var(--ts-fbb-fg, #111827); font-weight: 900; }
+.fv-table td.close          { background: var(--ts-close-bg, #ffffff); color: var(--ts-close-fg, #0b0d12); font-weight: 900; }
+.fv-table td.close-on-upper { background: var(--ts-close-on-upper-bg, #ef4444); color: var(--ts-close-on-upper-fg, #ffffff); font-weight: 900; }
+.fv-table td.close-on-lower { background: var(--ts-close-on-lower-bg, #00e676); color: var(--ts-close-on-lower-fg, #0b0d12); font-weight: 900; }
+.fv-table td.close-on-mid   { background: var(--ts-close-on-mid-bg, #22d3ee); color: var(--ts-close-on-mid-fg, #0b0d12); font-weight: 900; }
 
 .fv-zoom { padding: 4px 12px; font-weight: 700; font-size: var(--fs-lg); line-height: 1; }
 

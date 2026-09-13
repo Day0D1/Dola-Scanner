@@ -1,0 +1,206 @@
+<div id="chartSettingsBackdrop" class="cs-backdrop" hidden data-cs-close></div>
+<div id="chartSettingsModal" class="cs-modal" hidden role="dialog" aria-modal="true" aria-labelledby="csTitle">
+  <div class="cs-header">
+    <div>
+      <div id="csTitle" class="cs-title">Chart settings</div>
+      <div class="cs-sub">Applies to every non-index chart. SPX / VIX / BPNYA stay on locked breadth configs.</div>
+    </div>
+    <button class="cs-close-btn" data-cs-close aria-label="Close">&times;</button>
+  </div>
+
+  <div class="cs-tabs">
+    <button class="cs-tab active" data-cs-tab="candlestick">Candlestick</button>
+    <button class="cs-tab" data-cs-tab="pnf">Point &amp; Figure</button>
+  </div>
+
+  <div class="cs-body">
+    <div class="cs-pane" data-cs-pane="candlestick">
+      <div class="cs-section">
+        <div class="cs-section-title">Indicators</div>
+        <div class="cs-grid">
+          <label class="cs-field">Bollinger period
+            <input type="number" min="2" max="200" step="1" data-cs="candlestick.bb_period" />
+          </label>
+          <label class="cs-field">Bollinger std dev
+            <input type="number" min="0.1" max="5" step="0.1" data-cs="candlestick.bb_stddev" />
+          </label>
+          <label class="cs-field">RSI period
+            <input type="number" min="2" max="200" step="1" data-cs="candlestick.rsi_period" />
+          </label>
+          <label class="cs-field">RSI oversold
+            <input type="number" min="1" max="99" step="1" data-cs="candlestick.rsi_oversold" />
+          </label>
+          <label class="cs-field">RSI overbought
+            <input type="number" min="1" max="99" step="1" data-cs="candlestick.rsi_overbought" />
+          </label>
+        </div>
+      </div>
+
+      <div class="cs-section">
+        <div class="cs-section-title">Colors</div>
+        <div class="cs-grid">
+          <label class="cs-field">Bullish candle
+            <input type="color" data-cs="candlestick.colors.candle_up" />
+          </label>
+          <label class="cs-field">Bearish candle
+            <input type="color" data-cs="candlestick.colors.candle_down" />
+          </label>
+          <label class="cs-field">BB upper
+            <input type="color" data-cs="candlestick.colors.bb_upper" />
+          </label>
+          <label class="cs-field">BB middle
+            <input type="color" data-cs="candlestick.colors.bb_middle" />
+          </label>
+          <label class="cs-field">BB lower
+            <input type="color" data-cs="candlestick.colors.bb_lower" />
+          </label>
+          <label class="cs-field">RSI line
+            <input type="color" data-cs="candlestick.colors.rsi_line" />
+          </label>
+          <label class="cs-field">RSI oversold line
+            <input type="color" data-cs="candlestick.colors.rsi_oversold_line" />
+          </label>
+          <label class="cs-field">RSI overbought line
+            <input type="color" data-cs="candlestick.colors.rsi_overbought_line" />
+          </label>
+          <label class="cs-field">Entry marker
+            <input type="color" data-cs="candlestick.colors.event_entry" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-pane" data-cs-pane="pnf" hidden>
+      <div class="cs-section">
+        <div class="cs-section-title">Grid</div>
+        <div class="cs-grid">
+          <label class="cs-field">Box size (%)
+            <input type="number" min="0.05" max="20" step="0.05" data-cs="pnf.box" />
+          </label>
+          <label class="cs-field">Reversal (boxes)
+            <input type="number" min="1" max="10" step="1" data-cs="pnf.reversal" />
+          </label>
+        </div>
+      </div>
+
+      <div class="cs-section">
+        <div class="cs-section-title">Colors</div>
+        <div class="cs-grid">
+          <label class="cs-field">X marker
+            <input type="color" data-cs="pnf.colors.x" />
+          </label>
+          <label class="cs-field">O marker
+            <input type="color" data-cs="pnf.colors.o" />
+          </label>
+          <label class="cs-field">Current column
+            <input type="color" data-cs="pnf.colors.current_column" />
+          </label>
+          <label class="cs-field">Price label
+            <input type="color" data-cs="pnf.colors.price_label" />
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cs-footer">
+    <button id="csReset" class="btn ghost">Reset to defaults</button>
+    <div class="row-3">
+      <button class="btn ghost" data-cs-close>Cancel</button>
+      <button id="csApply" class="btn primary">Save &amp; apply</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import {
+    getChartSettings, saveChartSettings, resetChartSettings,
+    settingsForTicker, isMarketIndex, apiQueryFor, DEFAULTS
+  } from "/static/chart_settings.js?v={{ asset_v }}";
+
+  const backdrop = document.getElementById("chartSettingsBackdrop");
+  const modal    = document.getElementById("chartSettingsModal");
+
+  function getByPath(obj, path) {
+    return path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  }
+  function setByPath(obj, path, val) {
+    const keys = path.split(".");
+    let o = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+      const k = keys[i];
+      if (o[k] == null || typeof o[k] !== "object") o[k] = {};
+      o = o[k];
+    }
+    o[keys[keys.length - 1]] = val;
+  }
+
+  function fillForm(settings) {
+    modal.querySelectorAll("[data-cs]").forEach((el) => {
+      const val = getByPath(settings, el.dataset.cs);
+      if (val == null) return;
+      if (el.type === "color") {
+        el.value = /^#[0-9a-f]{6}$/i.test(val) ? val : el.value;
+      } else {
+        el.value = val;
+      }
+    });
+  }
+
+  function collect() {
+    const patch = {};
+    modal.querySelectorAll("[data-cs]").forEach((el) => {
+      let val = el.value;
+      if (el.type === "number") val = val === "" ? null : parseFloat(val);
+      if (val === null || Number.isNaN(val)) return;
+      setByPath(patch, el.dataset.cs, val);
+    });
+    return patch;
+  }
+
+  function open() {
+    fillForm(getChartSettings());
+    backdrop.hidden = false;
+    modal.hidden = false;
+    const first = modal.querySelector("input");
+    if (first) first.focus();
+  }
+  function close() {
+    backdrop.hidden = true;
+    modal.hidden = true;
+  }
+
+  modal.querySelectorAll(".cs-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      modal.querySelectorAll(".cs-tab").forEach((t) => t.classList.toggle("active", t === btn));
+      modal.querySelectorAll(".cs-pane").forEach((p) => { p.hidden = p.dataset.csPane !== btn.dataset.csTab; });
+    });
+  });
+
+  document.getElementById("csApply").addEventListener("click", () => {
+    saveChartSettings(collect());
+    close();
+  });
+  document.getElementById("csReset").addEventListener("click", () => {
+    resetChartSettings();
+    fillForm(DEFAULTS);
+  });
+  modal.addEventListener("click", (e) => { if (e.target.matches("[data-cs-close]")) close(); });
+  backdrop.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) close(); });
+
+  // Public openers used by the topbar cog / button on any page.
+  window.openChartSettings = open;
+
+  // Bridge for legacy (non-module) scripts: expose the settings functions on window
+  // so app.js can read user overrides without needing to become a module.
+  window.DolaChartSettings = {
+    getChartSettings,
+    settingsForTicker,
+    isMarketIndex,
+    apiQueryFor,
+    DEFAULTS,
+  };
+
+  fillForm(getChartSettings());
+</script>

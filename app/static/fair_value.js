@@ -19,9 +19,10 @@ window.addEventListener('resize', updateTopbarHeightVar);
 updateTopbarHeightVar();
 
 function fmtDate(iso) {
+  // MM/DD/YY — matches the trader's mental model and how StockCharts displays.
   const p = iso.split("-");
   if (p.length !== 3) return iso;
-  return `${p[2]}-${MONTHS[parseInt(p[1], 10) - 1]}`;
+  return `${p[1]}/${p[2]}/${p[0].slice(2)}`;
 }
 
 // 1% log-scale grid: each level is exactly 1% above the previous, matching
@@ -74,6 +75,28 @@ function nearestLogLevel(price) {
   if (price == null) return null;
   return boxIdxToPrice(priceToBoxIdx(price));
 }
+// Direction-aware snap. When the metric is FALLING, snap to the grid line
+// ABOVE the raw price (the trader's mental model: "price hasn't arrived at the
+// lower level yet, it's still coming from above"). When RISING, snap to the
+// grid line BELOW ("hasn't arrived at the higher level yet").
+//
+// Direction is taken from prev when available; if prev is missing or exactly
+// equal to curr (first day of the window, or a flat day) we PEEK FORWARD at
+// next — that catches the leftmost-day and quiet-day edge cases the prior
+// implementation was defaulting to floor for. Only when both neighbors are
+// missing/equal do we fall back to floor.
+function directionalLevel(prev, curr, next) {
+  if (curr == null) return null;
+  const floorIdx = priceToBoxIdx(curr);
+  let dir = 0;  // -1 = falling → ceiling; +1 = rising → floor; 0 = flat → floor
+  if (prev != null && prev !== curr) {
+    dir = curr < prev ? -1 : +1;
+  } else if (next != null && next !== curr) {
+    // next above us → we're rising toward it; next below us → we're falling toward it
+    dir = next < curr ? -1 : +1;
+  }
+  return dir === -1 ? boxIdxToPrice(floorIdx + 1) : boxIdxToPrice(floorIdx);
+}
 function eqLevel(a, b) {
   if (a == null || b == null) return false;
   if (isTraditional()) return Math.abs(a - b) < currentPnfMeta.box * 0.5;
@@ -97,6 +120,127 @@ async function load() {
     document.getElementById("fvContainer").innerHTML =
       `<div class="fv-loading">Error loading data: ${e.message}</div>`;
   }
+}
+
+// Freeze-row cascade animation. As the scroll container scrolls down past its
+// first screen of price rows, progressively shrink the sticky header rows so
+// they collapse into each other and reveal more of the price grid below. At
+// the top of the scroll they're full-size (22px each); past the collapse
+// distance they compress to ~10px, letting the user see the "full picture
+// from up to down" the way they asked. Restored on scroll back to the top.
+const FV_ROW_H_MAX = 22;
+const FV_ROW_H_MIN = 10;
+const FV_COLLAPSE_DISTANCE = 500;   // px of scroll to fully collapse the header
+function updateFvCascade(scrollTop) {
+  const container = document.getElementById("fvContainer");
+  if (!container) return;
+  const t = Math.max(0, Math.min(1, scrollTop / FV_COLLAPSE_DISTANCE));
+  // Easing: slower at the start, faster past halfway, so the header hangs on
+  // while the user is doing small corrections and only truly collapses on
+  // longer scrolls. Cubic ease-in.
+  const eased = t * t * (3 - 2 * t);   // smoothstep
+  const rowH = FV_ROW_H_MAX - (FV_ROW_H_MAX - FV_ROW_H_MIN) * eased;
+  container.style.setProperty("--fv-row-h", `${rowH.toFixed(2)}px`);
+  // Also progressively fade the header cells so the collapsed strip stays
+  // legible-but-quiet — keeps focus on the price rows.
+  const opacity = 1 - 0.35 * eased;
+  const table = container.querySelector(".fv-table thead");
+  if (table) table.style.opacity = opacity.toFixed(3);
+}
+// Time Series crosshair overlay. Two dashed lines follow the pointer across
+// the grid, plus a floating tag that shows the row's price. Position updates
+// on requestAnimationFrame so tracking stays smooth even when scrolled deep.
+function attachFvCrosshair() {
+  const scroll = document.querySelector("#fvContainer .fv-scroll");
+  const table = document.querySelector("#fvContainer .fv-table");
+  if (!scroll || !table || scroll.dataset.fvXhairWired === "1") return;
+  scroll.dataset.fvXhairWired = "1";
+
+  // Overlay elements — created once, kept alive across re-renders by re-parenting
+  // if the .fv-scroll was replaced (each render() rebuilds it, so we re-inject).
+  const vLine = document.createElement("div");
+  vLine.className = "fv-xhair-v";
+  const hLine = document.createElement("div");
+  hLine.className = "fv-xhair-h";
+  const tag = document.createElement("div");
+  tag.className = "fv-xhair-tag";
+  scroll.appendChild(vLine);
+  scroll.appendChild(hLine);
+  scroll.appendChild(tag);
+
+  let pending = false;
+  let lastX = 0, lastY = 0, lastPrice = "";
+
+  function findPriceForRow(clientY) {
+    // Reverse-map the cursor's Y coord to the tbody row it's over, then read
+    // its <th class="fv-pricelabel">. Falls back to null if we're over the
+    // header rows or below all rows.
+    const tbodyRows = table.querySelectorAll("tbody tr");
+    for (const row of tbodyRows) {
+      const rect = row.getBoundingClientRect();
+      if (clientY >= rect.top && clientY <= rect.bottom) {
+        const label = row.querySelector(".fv-pricelabel");
+        return label ? label.textContent.trim() : null;
+      }
+    }
+    return null;
+  }
+
+  function apply() {
+    pending = false;
+    const scrollRect = scroll.getBoundingClientRect();
+    // vLine.left = mouse X relative to scroll container's padding box
+    const x = lastX - scrollRect.left + scroll.scrollLeft;
+    const y = lastY - scrollRect.top  + scroll.scrollTop;
+    vLine.style.left = `${x}px`;
+    hLine.style.top  = `${y}px`;
+    tag.style.left   = `${x + 10}px`;
+    tag.style.top    = `${y - 22}px`;
+    if (lastPrice != null) {
+      tag.textContent = lastPrice;
+      tag.style.display = lastPrice ? "" : "none";
+    }
+  }
+
+  scroll.addEventListener("mousemove", (e) => {
+    lastX = e.clientX;
+    lastY = e.clientY;
+    lastPrice = findPriceForRow(e.clientY);
+    scroll.classList.add("xhair-on");
+    if (!pending) { pending = true; requestAnimationFrame(apply); }
+  });
+  scroll.addEventListener("mouseleave", () => {
+    scroll.classList.remove("xhair-on");
+  });
+}
+
+function attachFvCascade() {
+  const scroll = document.querySelector("#fvContainer .fv-scroll");
+  if (!scroll || scroll.dataset.fvCascadeWired === "1") return;
+  scroll.dataset.fvCascadeWired = "1";
+
+  // Direct synchronous update on scroll — the computation is O(1) and the
+  // browser already throttles scroll events. Skipping rAF here avoids the
+  // "listener never fired" corner cases we saw in the embedded preview.
+  scroll.addEventListener("scroll", () => updateFvCascade(scroll.scrollTop), { passive: true });
+
+  // Safety net: while the container is mounted, keep the cascade in sync via
+  // a lightweight rAF loop that re-reads scrollTop. Handles the cases where
+  // the scroll event doesn't fire (programmatic scrolling from another tool,
+  // reduced-motion, or hidden-tab throttling on the initial layout).
+  let lastTop = -1;
+  function tick() {
+    if (!scroll.isConnected) return;   // node removed on re-render, stop
+    const top = scroll.scrollTop;
+    if (top !== lastTop) {
+      lastTop = top;
+      updateFvCascade(top);
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  updateFvCascade(scroll.scrollTop);
 }
 
 function render(data) {
@@ -153,18 +297,30 @@ function render(data) {
   }
   html += `</thead><tbody>`;
 
+  // Pre-compute per-day snapped levels once (rather than inside the O(rows × days)
+  // inner loop). Directional snap: falling metrics snap UP (ceiling), rising
+  // metrics snap DOWN (floor). Passes both prev and next so leftmost-day and
+  // flat-day cases fall through to the future-facing hint instead of floor.
+  const daysMeta = days.map((d, i) => {
+    const prev = i > 0                ? days[i - 1] : null;
+    const next = i < days.length - 1  ? days[i + 1] : null;
+    return {
+      closeLvl:    directionalLevel(prev?.close,     d.close,     next?.close),
+      bbUpperLvl:  directionalLevel(prev?.bb_upper,  d.bb_upper,  next?.bb_upper),
+      bbLowerLvl:  directionalLevel(prev?.bb_lower,  d.bb_lower,  next?.bb_lower),
+      bbMiddleLvl: directionalLevel(prev?.bb_middle, d.bb_middle, next?.bb_middle),
+    };
+  });
+
   for (const price of levels) {
     html += `<tr><th class="fv-pricelabel">${price.toFixed(priceDigits)}</th>`;
-    for (const d of days) {
-      const bbUpperLvl  = nearestLogLevel(d.bb_upper);
-      const bbLowerLvl  = nearestLogLevel(d.bb_lower);
-      const bbMiddleLvl = nearestLogLevel(d.bb_middle);
-      const closeLvl    = nearestLogLevel(d.close);
-
-      const isBBUpper  = eqLevel(price, bbUpperLvl);
-      const isBBLower  = eqLevel(price, bbLowerLvl);
-      const isBBMiddle = eqLevel(price, bbMiddleLvl);
-      const isClose    = eqLevel(price, closeLvl);
+    for (let i = 0; i < days.length; i++) {
+      const d = days[i];
+      const m = daysMeta[i];
+      const isBBUpper  = eqLevel(price, m.bbUpperLvl);
+      const isBBLower  = eqLevel(price, m.bbLowerLvl);
+      const isBBMiddle = eqLevel(price, m.bbMiddleLvl);
+      const isClose    = eqLevel(price, m.closeLvl);
       const inRange    = price >= d.low && price <= d.high;
 
       let cls = "", text = "";
@@ -195,6 +351,15 @@ function render(data) {
   const container = document.getElementById("fvContainer");
   container.innerHTML = html;
   applyCellSize(days.length);
+  // Re-apply the user's Time Series colors AFTER injecting fresh HTML — the
+  // color vars live on .fv-container so a full innerHTML replace on that node
+  // would wipe them; we set them as inline style properties on the container.
+  if (window.DolaTsSettings) window.DolaTsSettings.applyTsSettings();
+  // The .fv-scroll element is a fresh node after each render; wire the
+  // cascade scroll listener and crosshair overlay onto it (both idempotent
+  // via data flags on the node so re-renders re-arm cleanly).
+  attachFvCascade();
+  attachFvCrosshair();
 }
 
 function applyCellSize(numDays) {
@@ -294,6 +459,13 @@ document.addEventListener("keydown", (e) => {
   }, { passive: false });
   container.addEventListener("touchend", () => { pinchStartDist = 0; });
 })();
+
+// Re-theme on Time Series Settings save. applyTsSettings writes CSS vars onto
+// every .fv-container, so no re-render is needed — the browser recomputes the
+// tinted cells against the new vars.
+window.addEventListener("dola:tssettings", () => {
+  if (window.DolaTsSettings) window.DolaTsSettings.applyTsSettings();
+});
 
 // Wire the ticker search input to navigate to another stock's Fair Value page.
 let allTickers = [];

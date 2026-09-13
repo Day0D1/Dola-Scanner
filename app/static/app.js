@@ -65,13 +65,42 @@ async function fetchChart(kind, key, timeframe, settings) {
   const path = kind === "index"
     ? `/api/index/${encodeURIComponent(key)}`
     : `/api/stock/${encodeURIComponent(key)}`;
-  const q = `?timeframe=${encodeURIComponent(timeframe)}&${_settingsToQuery(settings || {})}`;
+  // For stocks, layer user's universal chart settings on top of the modal's per-open settings.
+  // Indices intentionally ignore user settings — settingsForTicker returns null for SPX/VIX/BPNYA.
+  let mergedSettings = settings || {};
+  if (kind === "stock" && window.DolaChartSettings) {
+    const user = window.DolaChartSettings.settingsForTicker(key);
+    if (user) {
+      mergedSettings = {
+        ...mergedSettings,
+        bb_period:    user.candlestick.bb_period    ?? mergedSettings.bb_period,
+        bb_stddev:    user.candlestick.bb_stddev    ?? mergedSettings.bb_stddev,
+        rsi_period:   user.candlestick.rsi_period   ?? mergedSettings.rsi_period,
+        pnf_box:      user.pnf.box                  ?? mergedSettings.pnf_box,
+        pnf_reversal: user.pnf.reversal             ?? mergedSettings.pnf_reversal,
+      };
+    }
+  }
+  const q = `?timeframe=${encodeURIComponent(timeframe)}&${_settingsToQuery(mergedSettings)}`;
   const r = await fetch(path + q);
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
     throw new Error(err.error || `fetch failed: ${r.status}`);
   }
   return r.json();
+}
+
+// Returns the color palette for the currently-open ticker, or null for indices.
+function _userChartColors() {
+  if (!window.DolaChartSettings) return null;
+  const { kind, key } = state.modal;
+  if (kind !== "stock" || !key) return null;
+  const s = window.DolaChartSettings.settingsForTicker(key);
+  return s ? { candle: s.candlestick.colors, pnf: s.pnf.colors, rsi: {
+    period: s.candlestick.rsi_period,
+    oversold: s.candlestick.rsi_oversold,
+    overbought: s.candlestick.rsi_overbought,
+  } } : null;
 }
 
 // ---- Formatting helpers ------------------------------------------------
@@ -151,7 +180,10 @@ function renderBreadth(b) {
   // BPNYA
   const bp = b.bpnya || {};
   set("bpnyaSignal", bp.signal || "–", signalClass(bp.column));
-  set("bpnyaLevel",  bp.level == null ? "–" : fmt(bp.level, 2) + "%", "v");
+  // BPNYA is technically a percent index but every trading tool (StockCharts,
+  // most PMs) displays the level as a plain number — no % suffix — so the
+  // number reads as a chart level next to the P&F column, not a stat.
+  set("bpnyaLevel",  bp.level == null ? "–" : fmt(bp.level, 2), "v");
   set("bpnyaChange", fmtChange(bp.change), changeClass(bp.change));
 
   // VIX
@@ -425,10 +457,13 @@ function updateTimeframeChips() {
 function renderChartModal(payload) {
   const s = payload.signal;
   const last = payload.candles[payload.candles.length - 1];
-  const isPct = state.modal.kind === "index" && state.modal.key === "BPNYA";
-  const suffix = isPct ? "%" : "";
+  // BPNYA is an index level, not a currency: drop the $ prefix and the % suffix
+  // so it reads as "46.46" the way StockCharts shows it, not "$46.46" or "46.46%".
+  const isBpnya = state.modal.kind === "index" && state.modal.key === "BPNYA";
+  const prefix = isBpnya ? "" : "$";
+  const suffix = "";
   const meta = [];
-  meta.push(`${isPct ? "" : "$"}${last.close.toFixed(2)}${suffix}`);
+  meta.push(`${prefix}${last.close.toFixed(2)}${suffix}`);
   if (last.rsi != null) meta.push(`RSI(${payload.settings.rsi_period}) ${last.rsi.toFixed(1)}`);
   const pnfCol = payload.pnf.length ? payload.pnf[payload.pnf.length - 1].type : "–";
   meta.push(`P&F ${pnfCol}`);
@@ -467,6 +502,24 @@ function renderCandlestick(candles, settings) {
   const bbLower = candles.map((c) => c.bb_lower);
   const rsi = candles.map((c) => c.rsi);
 
+  const uc = _userChartColors();
+  const cUp        = uc?.candle?.candle_up          || "#22c55e";
+  const cDown      = uc?.candle?.candle_down        || "#ef4444";
+  const cBBU       = uc?.candle?.bb_upper           || "#8b93a4";
+  const cBBM       = uc?.candle?.bb_middle          || "#4c8dff";
+  const cBBL       = uc?.candle?.bb_lower           || "#8b93a4";
+  const cRSILine   = uc?.candle?.rsi_line           || "#eab308";
+  const cOversold  = uc?.candle?.rsi_oversold_line  || "#22c55e";
+  const cOverbght  = uc?.candle?.rsi_overbought_line || "#ef4444";
+
+  // hex → "rgba(r,g,b,a)" for candle fill; falls back to caller-provided default on parse failure.
+  const rgba = (hex, a, fallback) => {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return fallback;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  };
+
   // Candles have hover with OHLC; BB traces are silent (no label, no hover) per user request.
   const traces = [
     {
@@ -474,19 +527,19 @@ function renderCandlestick(candles, settings) {
       x, open, high, low, close,
       name: "",
       xhoverformat: "%m/%d/%Y",
-      increasing: { line: { color: "#22c55e" }, fillcolor: "rgba(34,197,94,0.4)" },
-      decreasing: { line: { color: "#ef4444" }, fillcolor: "rgba(239,68,68,0.4)" },
+      increasing: { line: { color: cUp   }, fillcolor: rgba(cUp,   0.4, "rgba(34,197,94,0.4)") },
+      decreasing: { line: { color: cDown }, fillcolor: rgba(cDown, 0.4, "rgba(239,68,68,0.4)") },
       xaxis: "x", yaxis: "y",
       showlegend: false,
     },
     { type: "scatter", mode: "lines", x, y: bbUpper,  name: "",
-      line: { color: "#8b93a4", width: 1, dash: "dot" }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" },
+      line: { color: cBBU, width: 1, dash: "dot" }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" },
     { type: "scatter", mode: "lines", x, y: bbMiddle, name: "",
-      line: { color: "#4c8dff", width: 1 }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" },
+      line: { color: cBBM, width: 1 }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" },
     { type: "scatter", mode: "lines", x, y: bbLower,  name: "",
-      line: { color: "#8b93a4", width: 1, dash: "dot" }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" },
+      line: { color: cBBL, width: 1, dash: "dot" }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" },
     { type: "scatter", mode: "lines", x, y: rsi, name: "",
-      line: { color: "#eab308", width: 1.5 }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y2" },
+      line: { color: cRSILine, width: 1.5 }, hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y2" },
   ];
 
   const layout = {
@@ -517,16 +570,18 @@ function renderCandlestick(candles, settings) {
     yaxis2: {
       domain: [0.0, 0.28], gridcolor: "#232833", zerolinecolor: "#232833", range: [0, 100],
       side: "right",
-      tickvals: [settings?.rsi_oversold ?? 30, 50, settings?.rsi_overbought ?? 70],
-      title: { text: `RSI(${settings?.rsi_period ?? 5})`, font: { color: "#8b93a4" } },
+      tickvals: [uc?.rsi?.oversold ?? settings?.rsi_oversold ?? 30, 50, uc?.rsi?.overbought ?? settings?.rsi_overbought ?? 70],
+      title: { text: `RSI(${uc?.rsi?.period ?? settings?.rsi_period ?? 5})`, font: { color: "#8b93a4" } },
     },
     shapes: [
       { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2",
-        y0: settings?.rsi_oversold ?? 30, y1: settings?.rsi_oversold ?? 30,
-        line: { color: "#22c55e", width: 1, dash: "dash" } },
+        y0: uc?.rsi?.oversold ?? settings?.rsi_oversold ?? 30,
+        y1: uc?.rsi?.oversold ?? settings?.rsi_oversold ?? 30,
+        line: { color: cOversold, width: 1, dash: "dash" } },
       { type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2",
-        y0: settings?.rsi_overbought ?? 70, y1: settings?.rsi_overbought ?? 70,
-        line: { color: "#ef4444", width: 1, dash: "dash" } },
+        y0: uc?.rsi?.overbought ?? settings?.rsi_overbought ?? 70,
+        y1: uc?.rsi?.overbought ?? settings?.rsi_overbought ?? 70,
+        line: { color: cOverbght, width: 1, dash: "dash" } },
     ],
   };
 
@@ -590,12 +645,12 @@ function renderPnF(columns, box, pnfType, targetId) {
     if (c.top_idx > maxIdx) maxIdx = c.top_idx;
   }
 
-  const boxH = 14;
-  const boxW = 14;
-  const labelW = 62;
-  const rightLabelW = 62;
-  const padTop = 12;
-  const padBottom = 34;
+  const boxH = 20;
+  const boxW = 28;
+  const labelW = 76;
+  const rightLabelW = 76;
+  const padTop = 14;
+  const padBottom = 36;
   const rows = maxIdx - minIdx + 1;
   const height = rows * boxH + padTop + padBottom;
   const width = labelW + columns.length * boxW + rightLabelW + 10;
@@ -617,7 +672,11 @@ function renderPnF(columns, box, pnfType, targetId) {
     parts.push(`<text x="${width - rightLabelW + 6}" y="${y + 3}" text-anchor="start" font-size="10" fill="#8b93a4" font-family="ui-monospace, Menlo, Consolas, monospace">${priceStr}</text>`);
   }
 
-  // Columns of X/O markers.
+  // Columns of X/O markers. Non-index tickers honor user color overrides.
+  const uc = _userChartColors();
+  const cX      = uc?.pnf?.x              || "#22c55e";
+  const cO      = uc?.pnf?.o              || "#ef4444";
+  const cCurCol = uc?.pnf?.current_column || "#4c8dff";
   for (let ci = 0; ci < columns.length; ci++) {
     const c = columns[ci];
     const cx = labelW + ci * boxW + boxW / 2;
@@ -625,17 +684,16 @@ function renderPnF(columns, box, pnfType, targetId) {
     for (let idx = c.bottom_idx; idx <= c.top_idx; idx++) {
       const cy = padTop + (maxIdx - idx) * boxH + boxH / 2;
       if (c.type === "X") {
-        const color = "#22c55e";
-        parts.push(`<line x1="${cx - 4}" y1="${cy - 4}" x2="${cx + 4}" y2="${cy + 4}" stroke="${color}" stroke-width="1.6"/>`);
-        parts.push(`<line x1="${cx - 4}" y1="${cy + 4}" x2="${cx + 4}" y2="${cy - 4}" stroke="${color}" stroke-width="1.6"/>`);
+        parts.push(`<line x1="${cx - 7}" y1="${cy - 7}" x2="${cx + 7}" y2="${cy + 7}" stroke="${cX}" stroke-width="2.2" stroke-linecap="round"/>`);
+        parts.push(`<line x1="${cx - 7}" y1="${cy + 7}" x2="${cx + 7}" y2="${cy - 7}" stroke="${cX}" stroke-width="2.2" stroke-linecap="round"/>`);
       } else {
-        parts.push(`<circle cx="${cx}" cy="${cy}" r="4" fill="none" stroke="#ef4444" stroke-width="1.6"/>`);
+        parts.push(`<circle cx="${cx}" cy="${cy}" r="7" fill="none" stroke="${cO}" stroke-width="2.2"/>`);
       }
     }
     if (isCurrent) {
       const topY = padTop + (maxIdx - c.top_idx) * boxH;
       const botY = padTop + (maxIdx - c.bottom_idx) * boxH + boxH;
-      parts.push(`<rect x="${cx - boxW / 2}" y="${topY}" width="${boxW}" height="${botY - topY}" fill="none" stroke="#4c8dff" stroke-width="1" stroke-dasharray="2 2" opacity="0.7"/>`);
+      parts.push(`<rect x="${cx - boxW / 2}" y="${topY}" width="${boxW}" height="${botY - topY}" fill="none" stroke="${cCurCol}" stroke-width="1" stroke-dasharray="2 2" opacity="0.7"/>`);
     }
   }
 
@@ -676,8 +734,46 @@ function renderPnF(columns, box, pnfType, targetId) {
     parts.push(`<text x="${cx}" y="${padTop + rows * boxH + 28}" text-anchor="middle" font-size="9" fill="#5a6070" font-family="ui-monospace, Menlo, Consolas, monospace">${fmtDateMDY(dstr)}</text>`);
   }
 
+  // Crosshair overlay lines — drawn last so they render on top. Positioned
+  // off-screen initially; mousemove updates them per frame. Full TradingView-style
+  // tracking: dashed lines follow the cursor and a price tooltip trails it,
+  // clamped to the plot area.
+  parts.push(`<line id="pnf-xhair-v-${targetId || "pnfChart"}" x1="-10" y1="0" x2="-10" y2="${height}" stroke="#4c8dff" stroke-width="1" stroke-dasharray="3 3" opacity="0.7" pointer-events="none"/>`);
+  parts.push(`<line id="pnf-xhair-h-${targetId || "pnfChart"}" x1="0" y1="-10" x2="${width}" y2="-10" stroke="#4c8dff" stroke-width="1" stroke-dasharray="3 3" opacity="0.7" pointer-events="none"/>`);
+  parts.push(`<text id="pnf-xhair-t-${targetId || "pnfChart"}" x="0" y="0" font-size="10" fill="#e6e8ec" font-family="ui-monospace, Menlo, Consolas, monospace" pointer-events="none"></text>`);
+
   parts.push("</svg>");
   container.innerHTML = parts.join("");
+  // Set the crosshair cursor on the container itself so the whole plot area
+  // reads as trackable, not just the SVG hit boxes.
+  container.style.cursor = "crosshair";
+
+  // Wire the crosshair — reverse-map cursor Y to a price via boxIdx.
+  const svg = container.querySelector("svg");
+  const vLine = container.querySelector(`#pnf-xhair-v-${targetId || "pnfChart"}`);
+  const hLine = container.querySelector(`#pnf-xhair-h-${targetId || "pnfChart"}`);
+  const tLbl  = container.querySelector(`#pnf-xhair-t-${targetId || "pnfChart"}`);
+  if (svg && vLine && hLine && tLbl) {
+    svg.addEventListener("mousemove", (e) => {
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX; pt.y = e.clientY;
+      const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
+      const x = Math.max(labelW, Math.min(cursor.x, width - rightLabelW));
+      const y = Math.max(padTop, Math.min(cursor.y, padTop + rows * boxH));
+      vLine.setAttribute("x1", x); vLine.setAttribute("x2", x);
+      hLine.setAttribute("y1", y); hLine.setAttribute("y2", y);
+      const idxFromY = maxIdx - Math.floor((y - padTop) / boxH);
+      const priceAtY = priceOfIdx(idxFromY);
+      tLbl.setAttribute("x", x + 8);
+      tLbl.setAttribute("y", y - 4);
+      tLbl.textContent = priceAtY.toFixed(2);
+    });
+    svg.addEventListener("mouseleave", () => {
+      vLine.setAttribute("x1", -10); vLine.setAttribute("x2", -10);
+      hLine.setAttribute("y1", -10); hLine.setAttribute("y2", -10);
+      tLbl.textContent = "";
+    });
+  }
 }
 
 // ---- Event wiring -----------------------------------------------------
@@ -753,6 +849,15 @@ if (window.attachTickerSearch) {
 // Pillar cards open the index chart modal.
 document.querySelectorAll(".pillar.clickable").forEach(el => {
   el.addEventListener("click", () => openIndexModal(el.dataset.index));
+});
+
+// Universal chart settings saved → re-render whatever chart is currently open.
+// Indices (SPX/VIX/BPNYA) are unaffected: settingsForTicker returns null for them,
+// so fetchChart and the renderers use their locked defaults.
+window.addEventListener("dola:chartsettings", () => {
+  const { kind, key } = state.modal;
+  if (!kind || !key) return;
+  loadCharts();
 });
 
 // Settings panel wiring.
