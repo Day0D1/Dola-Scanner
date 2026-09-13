@@ -1104,6 +1104,12 @@ h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: 600; }
   box-shadow: var(--shadow-3);
   animation: csIn var(--dur-med) var(--ease);
 }
+/* The rules above set `display: flex`, which the browser's default
+   `[hidden] { display: none }` cannot beat on specificity. Add an explicit
+   override so setting `modal.hidden = true` from JS actually hides the modal
+   on v2 pages the way it does on legacy. Also covers the backdrop for
+   symmetry with the standalone chart_settings.css. */
+.cs-modal[hidden], .cs-backdrop[hidden] { display: none !important; }
 .cs-header {
   padding: var(--sp-4) var(--sp-5);
   border-bottom: 1px solid var(--border);
