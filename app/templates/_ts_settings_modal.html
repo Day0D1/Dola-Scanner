@@ -2,13 +2,26 @@
 <div id="tsSettingsModal" class="cs-modal" hidden role="dialog" aria-modal="true" aria-labelledby="tsTitle">
   <div class="cs-header">
     <div>
-      <div id="tsTitle" class="cs-title">Time Series colors</div>
-      <div class="cs-sub">Applies to every time series chart (H/L/F markers, close cells, range highlight).</div>
+      <div id="tsTitle" class="cs-title">Time Series settings</div>
+      <div class="cs-sub">Price grid step + colors. Applies to every time series chart.</div>
     </div>
     <button class="cs-close-btn" data-ts-close aria-label="Close">&times;</button>
   </div>
 
   <div class="cs-body">
+    <div class="cs-section">
+      <div class="cs-section-title">Price grid</div>
+      <div class="cs-grid">
+        <label class="cs-field">Price step (%)
+          <input type="number" min="0.05" max="10" step="0.05" data-ts="price_step_pct" data-ts-mode="number" />
+        </label>
+      </div>
+      <div class="cs-sub" style="margin-top:6px">
+        Each row on the price ladder is this % above the row below it. Stocks and SPX only —
+        VIX and BPNYA use their fixed-point P&amp;F box from breadth config.
+      </div>
+    </div>
+
     <div class="cs-section">
       <div class="cs-section-title">Bollinger markers</div>
       <div class="cs-grid">
@@ -105,7 +118,8 @@
       const key = el.dataset.ts;
       const val = settings[key];
       if (val == null) return;
-      if (el.dataset.tsMode === "hex-alpha") {
+      const mode = el.dataset.tsMode;
+      if (mode === "hex-alpha") {
         const parsed = rgbaToHex(val);
         if (parsed) {
           el.value = parsed.hex;
@@ -114,6 +128,8 @@
           el.value = val;
           alphaByField[key] = 1;
         }
+      } else if (mode === "number") {
+        el.value = String(val);
       } else if (/^#[0-9a-f]{6}$/i.test(val)) {
         el.value = val;
       }
@@ -125,8 +141,12 @@
     modal.querySelectorAll("[data-ts]").forEach((el) => {
       const key = el.dataset.ts;
       const raw = el.value;
-      if (el.dataset.tsMode === "hex-alpha") {
+      const mode = el.dataset.tsMode;
+      if (mode === "hex-alpha") {
         patch[key] = hexToRgba(raw, alphaByField[key] ?? 0.7);
+      } else if (mode === "number") {
+        const n = parseFloat(raw);
+        if (!Number.isNaN(n)) patch[key] = n;
       } else {
         patch[key] = raw;
       }

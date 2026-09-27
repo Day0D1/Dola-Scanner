@@ -13,6 +13,12 @@
 const KEY = "dola_ts_settings";
 
 export const DEFAULTS = Object.freeze({
+  // Price grid increment for percentage-scale instruments (stocks + SPX).
+  // Each row on the left price ladder is this % above the row below it —
+  // matches the P&F box grid. Traditional-scale instruments (VIX, BPNYA)
+  // ignore this and use their fixed-point box from the P&F config.
+  price_step_pct: 1.0,
+
   hbb_bg: "#22c55e",            // BB upper marker (H) — green per user
   hbb_fg: "#ffffff",
   lbb_bg: "#ef4444",            // BB lower marker (L) — red per user

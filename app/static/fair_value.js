@@ -25,13 +25,25 @@ function fmtDate(iso) {
   return `${p[1]}/${p[2]}/${p[0].slice(2)}`;
 }
 
-// 1% log-scale grid: each level is exactly 1% above the previous, matching
-// the percentage-based P&F box grid the app uses everywhere else. For
-// TRADITIONAL-scale instruments (VIX, BPNYA — fixed 1-point boxes) the grid
-// switches to linear steps of the box size so the row count stays sane and
-// each row corresponds to exactly one P&F box.
-const LOG_STEP = 1.01;
-const LN_STEP = Math.log(LOG_STEP);
+// Percentage log-scale grid: each level is exactly `price_step_pct` % above
+// the previous, matching the percentage-based P&F box grid the app uses
+// everywhere else. Default is 1% and users can change it from the Time Series
+// Settings modal (persists via ts_settings.js). Traditional-scale instruments
+// (VIX, BPNYA — fixed-point boxes) ignore this and switch to linear steps of
+// the P&F box size so each row corresponds to exactly one P&F box.
+const DEFAULT_LOG_STEP_PCT = 1.0;
+function currentLogStepPct() {
+  const s = window.DolaTsSettings?.getTsSettings?.();
+  const v = s?.price_step_pct;
+  if (typeof v === "number" && v > 0) return v;
+  return DEFAULT_LOG_STEP_PCT;
+}
+function currentLnStep() { return Math.log(1 + currentLogStepPct() / 100); }
+
+// Tracks the step used for the last-rendered grid so a price-step-only save
+// via the Time Series settings modal can detect the change and force a full
+// rebuild (color-only saves skip the round-trip).
+let lastRenderedStepPct = null;
 
 // pnfMeta is the {pnf_type, box, reversal} object from the /api/fair_value
 // response. Persist it for use across helpers.
@@ -41,11 +53,11 @@ function isTraditional() { return currentPnfMeta.pnf_type === "traditional"; }
 
 function priceToBoxIdx(price) {
   if (isTraditional()) return Math.floor(price / currentPnfMeta.box);
-  return Math.floor(Math.log(price) / LN_STEP);
+  return Math.floor(Math.log(price) / currentLnStep());
 }
 function boxIdxToPrice(idx) {
   if (isTraditional()) return idx * currentPnfMeta.box;
-  return Math.exp(idx * LN_STEP);
+  return Math.exp(idx * currentLnStep());
 }
 function priceDigitsFor(price) {
   if (price >= 500) return 2;
@@ -244,6 +256,9 @@ function attachFvCascade() {
 }
 
 function render(data) {
+  // Remember the step used for this render so a price-step-only save can
+  // detect the change and force a rebuild (see dola:tssettings listener).
+  lastRenderedStepPct = currentLogStepPct();
   const days = data.days;
   if (!days || !days.length) {
     document.getElementById("fvContainer").innerHTML =
@@ -463,8 +478,15 @@ document.addEventListener("keydown", (e) => {
 // Re-theme on Time Series Settings save. applyTsSettings writes CSS vars onto
 // every .fv-container, so no re-render is needed — the browser recomputes the
 // tinted cells against the new vars.
-window.addEventListener("dola:tssettings", () => {
+window.addEventListener("dola:tssettings", (e) => {
   if (window.DolaTsSettings) window.DolaTsSettings.applyTsSettings();
+  // If the price-step % changed, the grid rows have to be rebuilt — a color
+  // re-theme via CSS vars isn't enough. Only re-fetch when the step actually
+  // moved; a pure color save skips the round-trip.
+  const next = e?.detail?.price_step_pct;
+  if (typeof next === "number" && Math.abs(next - lastRenderedStepPct) > 1e-9) {
+    load();
+  }
 });
 
 // Wire the ticker search input to navigate to another stock's Fair Value page.
