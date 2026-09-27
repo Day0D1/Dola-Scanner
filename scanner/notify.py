@@ -144,3 +144,92 @@ def send_scan_summary(
         format_scan_summary(breadth, signals, fresh_entries, fresh_candidates, ibd50_tickers),
         silent=not has_fresh,
     )
+
+
+# --- IBD 50 weekly-diff notification --------------------------------------
+
+def format_ibd50_update(
+    as_of_date: str,
+    new_tickers: Set[str],
+    prev_tickers: Optional[Set[str]],
+    tenure: Optional[dict] = None,
+    history_weeks: int = 0,
+) -> str:
+    """Format the weekly IBD 50 refresh notification.
+
+    prev_tickers=None means this is the first-ever recorded snapshot — we
+    tell the user we're starting the tenure clock. Otherwise we lay out
+    entering / leaving / staying + a top-tenure summary. Kept HTML-parse-mode
+    friendly (uses <b>, no unbalanced tags).
+    """
+    tenure = tenure or {}
+    entering = sorted(new_tickers - (prev_tickers or set()))
+    leaving  = sorted((prev_tickers or set()) - new_tickers)
+    staying  = sorted(new_tickers & (prev_tickers or set()))
+
+    lines = []
+    try:
+        pretty_date = dt.date.fromisoformat(as_of_date).strftime("%b %d, %Y")
+    except Exception:
+        pretty_date = as_of_date
+    lines.append(f"<b>🔥 IBD 50 refreshed — {pretty_date}</b>")
+
+    if prev_tickers is None:
+        lines.append("")
+        lines.append(f"First recorded snapshot ({len(new_tickers)} tickers).")
+        lines.append("Tenure clock starts now — future updates will show week-over-week diffs.")
+        lines.append("")
+        lines.append("<b>Full list:</b>")
+        lines.append(", ".join(sorted(new_tickers)))
+        return "\n".join(lines)
+
+    lines.append(
+        f"{len(entering)} in · {len(leaving)} out · {len(staying)} staying "
+        f"({len(new_tickers)} total)"
+    )
+    lines.append("")
+
+    if entering:
+        lines.append(f"<b>🆕 Entering ({len(entering)}):</b>")
+        lines.append(", ".join(entering))
+        lines.append("")
+    if leaving:
+        lines.append(f"<b>❌ Leaving ({len(leaving)}):</b>")
+        lines.append(", ".join(leaving))
+        lines.append("")
+
+    if tenure and history_weeks >= 2:
+        # Sort by tenure desc, then ticker asc; show top 10.
+        top = sorted(tenure.items(), key=lambda kv: (-kv[1], kv[0]))
+        max_shown = 10
+        lines.append(f"<b>⏳ Longest tenure (top {max_shown} of {len(top)}):</b>")
+        pad = max((len(t) for t, _ in top[:max_shown]), default=1)
+        for t, weeks in top[:max_shown]:
+            unit = "week" if weeks == 1 else "weeks"
+            lines.append(f"<code>{t.ljust(pad)}  {weeks} {unit}</code>")
+        lines.append("")
+        long_runs = sum(1 for _, w in tenure.items() if w >= 4)
+        if long_runs:
+            lines.append(f"{long_runs} tickers have held their spot 4+ weeks in a row.")
+    elif tenure:
+        lines.append(f"Tenure history: {history_weeks} week(s) recorded — showing more once we have a longer trail.")
+
+    lines.append("")
+    lines.append("Source: capforceetf.com/ffty/details")
+    return "\n".join(lines)
+
+
+def send_ibd50_update(
+    as_of_date: str,
+    new_tickers: Set[str],
+    prev_tickers: Optional[Set[str]],
+    tenure: Optional[dict] = None,
+    history_weeks: int = 0,
+    silent: bool = False,
+) -> dict:
+    """Send the weekly IBD 50 update to Telegram. Silent=True for a quiet
+    (no-sound) delivery — used when the list didn't actually change."""
+    return send_telegram(
+        format_ibd50_update(as_of_date, new_tickers, prev_tickers, tenure, history_weeks),
+        silent=silent,
+    )

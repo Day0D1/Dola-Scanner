@@ -73,6 +73,19 @@ def init_db() -> None:
             meta_json TEXT
         );
 
+        -- One row per (name, as_of_date). Written every time a watchlist
+        -- gets refreshed so we can diff week-over-week and compute
+        -- per-ticker tenure (consecutive weekly appearances).
+        CREATE TABLE IF NOT EXISTS watchlist_history (
+            name TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            tickers_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (name, as_of_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_watchlist_history_name_date
+            ON watchlist_history(name, as_of_date DESC);
+
         CREATE TABLE IF NOT EXISTS daily_snapshot (
             date TEXT PRIMARY KEY,
             spx_signal TEXT,
@@ -417,6 +430,96 @@ def get_watchlist(name: str) -> Optional[dict]:
         "fetched_at": row[4],
         "meta": json.loads(row[5]) if row[5] else None,
     }
+
+
+# --- Watchlist history + tenure ------------------------------------------
+
+def record_watchlist_snapshot(
+    name: str,
+    tickers: list,
+    as_of_date: str,
+    fetched_at: Optional[str] = None,
+) -> None:
+    """Record one weekly snapshot into watchlist_history.
+
+    Idempotent by (name, as_of_date): re-recording the same date replaces the
+    snapshot. Called from _refresh_ibd50 after every successful fetch so we
+    accumulate a week-over-week trail even if the app is restarted.
+    """
+    fetched_at = fetched_at or dt.datetime.now(dt.timezone.utc).isoformat()
+    with _connect() as c:
+        c.execute(
+            """
+            INSERT INTO watchlist_history (name, as_of_date, tickers_json, fetched_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(name, as_of_date) DO UPDATE SET
+                tickers_json = excluded.tickers_json,
+                fetched_at   = excluded.fetched_at
+            """,
+            (name, as_of_date, json.dumps(sorted(set(tickers))), fetched_at),
+        )
+
+
+def get_watchlist_prev_snapshot(name: str, before_date: str) -> Optional[dict]:
+    """Return the most recent history row STRICTLY before `before_date`.
+
+    Used to diff the just-fetched list against the previous one. Returns
+    None when there is no earlier snapshot (first-ever fetch).
+    """
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT as_of_date, tickers_json, fetched_at
+            FROM watchlist_history
+            WHERE name=? AND as_of_date<?
+            ORDER BY as_of_date DESC
+            LIMIT 1
+            """,
+            (name, before_date),
+        ).fetchone()
+    if not row:
+        return None
+    return {"as_of_date": row[0], "tickers": json.loads(row[1]), "fetched_at": row[2]}
+
+
+def get_watchlist_history_dates(name: str) -> list:
+    """All recorded snapshot dates for a watchlist, most-recent first."""
+    with _connect() as c:
+        return [r[0] for r in c.execute(
+            "SELECT as_of_date FROM watchlist_history WHERE name=? ORDER BY as_of_date DESC",
+            (name,),
+        )]
+
+
+def compute_watchlist_tenure(name: str) -> dict:
+    """Return {ticker: consecutive_week_count} for every ticker in the most
+    recent snapshot.
+
+    Tenure is "weeks in a row ending at the latest snapshot" — the run
+    breaks the moment a ticker is missing from any snapshot in the walk-back.
+    Rejoins after a gap restart the count. When history has only one row,
+    every current ticker gets tenure 1.
+    """
+    with _connect() as c:
+        rows = c.execute(
+            "SELECT as_of_date, tickers_json FROM watchlist_history "
+            "WHERE name=? ORDER BY as_of_date DESC",
+            (name,),
+        ).fetchall()
+    if not rows:
+        return {}
+    snapshots = [(d, set(json.loads(t))) for d, t in rows]
+    latest_tickers = snapshots[0][1]
+    tenure = {}
+    for ticker in latest_tickers:
+        count = 0
+        for _, tickers_set in snapshots:
+            if ticker in tickers_set:
+                count += 1
+            else:
+                break
+        tenure[ticker] = count
+    return tenure
 
 
 def get_daily_history(limit: int = 200) -> list:

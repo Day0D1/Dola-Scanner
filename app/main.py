@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 import dataclasses
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from scanner import config, data, ibd50, indicators, store, universe
+from scanner import config, data, ibd50, indicators, notify, store, universe
 from scanner.breadth import read_breadth
 from scanner.notify import send_scan_summary
 from scanner.signals import StockSignal, evaluate_stock
@@ -116,11 +116,21 @@ def _ibd50_watchlist_set() -> set:
         return set()
 
 
-def _refresh_ibd50(force: bool = False) -> dict:
+def _refresh_ibd50(force: bool = False, notify_telegram: bool = True) -> dict:
     """Fetch the current IBD 50 list from CapForce and persist to DB.
 
     Returns a summary dict so API callers see what happened. If force=False
     and the DB already has today's snapshot, we skip the network call.
+
+    On every successful refresh we ALSO write to watchlist_history so we can
+    compute week-over-week diffs and per-ticker tenure. When notify_telegram
+    is True (the default) and TELEGRAM_BOT_TOKEN is configured, we push a
+    Telegram message summarizing:
+      - date the list was refreshed
+      - entering / leaving / staying (compared to the previous history row)
+      - top 10 longest-tenure tickers (once history has ≥2 rows)
+    The push is silent when the list is unchanged; the tenure story still
+    gets updated in DB either way.
     """
     existing = store.get_watchlist(IBD50_WATCHLIST_NAME)
     if existing and not force:
@@ -134,6 +144,10 @@ def _refresh_ibd50(force: bool = False) -> dict:
         print(f"[ibd50] fetch failed: {e}")
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
+    # Look up the previous snapshot BEFORE we record today's, so the diff is
+    # against last week (or whenever the previous fetch happened), not today.
+    prev = store.get_watchlist_prev_snapshot(IBD50_WATCHLIST_NAME, snap.as_of_date)
+
     store.upsert_watchlist(
         IBD50_WATCHLIST_NAME,
         snap.tickers,
@@ -145,15 +159,47 @@ def _refresh_ibd50(force: bool = False) -> dict:
             "sectors": snap.sectors or {},
         },
     )
+    # History is separate from the "current" watchlist row — one row per week.
+    store.record_watchlist_snapshot(
+        IBD50_WATCHLIST_NAME, snap.tickers, snap.as_of_date, fetched_at=snap.fetched_at,
+    )
     # Invalidate the cached sector map so the new IBD sectors get merged in.
     global _TICKER_TO_SECTOR
     _TICKER_TO_SECTOR = None
     print(f"[ibd50] refreshed: {len(snap.tickers)} tickers as of {snap.as_of_date}")
+
+    # Compute diff + tenure for both the return payload and the Telegram push.
+    new_set = set(snap.tickers)
+    prev_set = set(prev["tickers"]) if prev else None
+    entering = sorted(new_set - (prev_set or set()))
+    leaving  = sorted((prev_set or set()) - new_set)
+    staying  = sorted(new_set & (prev_set or set())) if prev_set else []
+    changed  = bool(entering or leaving)
+    tenure   = store.compute_watchlist_tenure(IBD50_WATCHLIST_NAME)
+    history_weeks = len(store.get_watchlist_history_dates(IBD50_WATCHLIST_NAME))
+
+    telegram_sent = False
+    if notify_telegram and getattr(config, "TELEGRAM_BOT_TOKEN", None):
+        try:
+            # Silent push when nothing changed — you still get the record but
+            # the phone doesn't buzz on a quiet week.
+            notify.send_ibd50_update(
+                snap.as_of_date, new_set, prev_set, tenure=tenure,
+                history_weeks=history_weeks, silent=not changed,
+            )
+            telegram_sent = True
+        except Exception as e:  # noqa: BLE001
+            print(f"[ibd50] telegram send failed: {e}")
+
     return {
         "status": "refreshed",
         "as_of_date": snap.as_of_date,
         "count": len(snap.tickers),
         "tickers": snap.tickers,
+        "prev_as_of_date": prev["as_of_date"] if prev else None,
+        "diff": {"entering": entering, "leaving": leaving, "staying_count": len(staying)},
+        "history_weeks": history_weeks,
+        "telegram_sent": telegram_sent,
     }
 
 
