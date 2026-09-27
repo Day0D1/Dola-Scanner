@@ -311,6 +311,23 @@ def purge_bpnya_scan_rows() -> int:
         return cur.rowcount or 0
 
 
+def purge_bpnya_out_of_range(min_year: int = 2000, max_year: int = 2100) -> int:
+    """Delete rows whose date falls outside a sane year window.
+
+    A single typo in an uploaded CSV (e.g. "09-24-226" parsed as year 226 or
+    "24" parsed as 2224) is enough to blow the chart's x-axis open by
+    centuries, compressing every real candle into an invisible sliver and
+    making the whole thing read as a flat line. The CSV import endpoint runs
+    this after every upload so a stray bad row can't linger.
+    """
+    with _connect() as c:
+        cur = c.execute(
+            "DELETE FROM bpnya_history WHERE substr(date, 1, 4) < ? OR substr(date, 1, 4) > ?",
+            (f"{min_year:04d}", f"{max_year:04d}"),
+        )
+        return cur.rowcount or 0
+
+
 # --- Daily snapshot -------------------------------------------------------
 
 _SNAPSHOT_COLS = [

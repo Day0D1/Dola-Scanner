@@ -1072,6 +1072,13 @@ async def api_bpnya_import(file: Optional[UploadFile] = File(None), body: Option
     first_date = None
     last_date = None
     ohlc_stored = 0
+    # Sane-year guard: pandas will happily parse a typo like "9-24-226" as
+    # year 226 or a 2-digit shorthand like "24" as 2224. One bogus row is
+    # enough to blow the chart's x-axis span open, crushing all real candles
+    # into an invisible sliver and making the whole chart read as a flat line.
+    # Reject anything outside a comfortably wide window.
+    MIN_YEAR = 2000
+    MAX_YEAR = 2100
     for _, row in df.iterrows():
         d_raw = row.get("date")
         v_raw = row.get(close_col)
@@ -1083,6 +1090,10 @@ async def api_bpnya_import(file: Optional[UploadFile] = File(None), body: Option
             continue
         if pd.isna(d) or pd.isna(v):
             skipped += 1
+            continue
+        if d.year < MIN_YEAR or d.year > MAX_YEAR:
+            skipped += 1
+            errors.append(f"date {d.date().isoformat()!r} outside {MIN_YEAR}-{MAX_YEAR} — probable typo, skipping")
             continue
         # Optional OHL
         o_val = pd.to_numeric(row.get(open_col), errors="coerce") if open_col else None
@@ -1102,12 +1113,19 @@ async def api_bpnya_import(file: Optional[UploadFile] = File(None), body: Option
         except Exception as e:  # noqa: BLE001
             errors.append(f"{d_iso}: {e}")
 
-    # Self-heal: whenever authoritative CSV data arrives, drop any lingering
-    # source='scan' rows. Deployed DBs still hold scan-written garbage from
-    # before we removed the scanner's BPNYA write; those rows sit between
-    # imports as visible chart discontinuities. Fires only on successful
-    # import so a bad upload doesn't destroy history.
-    scan_purged = store.purge_bpnya_scan_rows() if imported > 0 else 0
+    # Self-heal on every successful import:
+    #   - drop stray source='scan' rows left over from before we removed the
+    #     scanner's BPNYA write
+    #   - drop any prior row with an out-of-range date (e.g. a year-226 typo
+    #     from a previous upload) so one bad row can't keep blowing up the
+    #     chart's x-axis span
+    # Both are guarded behind imported > 0 so a bad upload can't destroy
+    # history — the purges only fire when new authoritative data landed.
+    scan_purged = 0
+    stale_dates_purged = 0
+    if imported > 0:
+        scan_purged = store.purge_bpnya_scan_rows()
+        stale_dates_purged = store.purge_bpnya_out_of_range(MIN_YEAR, MAX_YEAR)
 
     return {
         "status": "ok",
@@ -1115,6 +1133,7 @@ async def api_bpnya_import(file: Optional[UploadFile] = File(None), body: Option
         "with_ohlc": ohlc_stored,
         "skipped": skipped,
         "scan_rows_purged": scan_purged,
+        "stale_dates_purged": stale_dates_purged,
         "close_column_used": close_col,
         "columns_detected": {"open": open_col, "high": high_col, "low": low_col},
         "date_range": [first_date, last_date],
