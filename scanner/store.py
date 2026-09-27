@@ -297,6 +297,20 @@ def get_bpnya_latest() -> Optional[dict]:
         return {"date": row[0], "pct": row[1], "universe_size": row[2]}
 
 
+def purge_bpnya_scan_rows() -> int:
+    """Delete every source='scan' row from bpnya_history and return the count.
+
+    The scanner no longer writes BPNYA (its ~333-stock proxy diverged from the
+    real NYSE Bullish Percent Index), but deployed DBs still hold scan-written
+    rows from before that shipped. Those rows sit between authoritative import
+    or manual entries and show as visible chart discontinuities. The CSV
+    import endpoint calls this on every successful import so the DB self-heals.
+    """
+    with _connect() as c:
+        cur = c.execute("DELETE FROM bpnya_history WHERE source='scan'")
+        return cur.rowcount or 0
+
+
 # --- Daily snapshot -------------------------------------------------------
 
 _SNAPSHOT_COLS = [

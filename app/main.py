@@ -1102,11 +1102,19 @@ async def api_bpnya_import(file: Optional[UploadFile] = File(None), body: Option
         except Exception as e:  # noqa: BLE001
             errors.append(f"{d_iso}: {e}")
 
+    # Self-heal: whenever authoritative CSV data arrives, drop any lingering
+    # source='scan' rows. Deployed DBs still hold scan-written garbage from
+    # before we removed the scanner's BPNYA write; those rows sit between
+    # imports as visible chart discontinuities. Fires only on successful
+    # import so a bad upload doesn't destroy history.
+    scan_purged = store.purge_bpnya_scan_rows() if imported > 0 else 0
+
     return {
         "status": "ok",
         "imported": imported,
         "with_ohlc": ohlc_stored,
         "skipped": skipped,
+        "scan_rows_purged": scan_purged,
         "close_column_used": close_col,
         "columns_detected": {"open": open_col, "high": high_col, "low": low_col},
         "date_range": [first_date, last_date],
