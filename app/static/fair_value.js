@@ -31,7 +31,7 @@ function fmtDate(iso) {
 // Settings modal (persists via ts_settings.js). Traditional-scale instruments
 // (VIX, BPNYA — fixed-point boxes) ignore this and switch to linear steps of
 // the P&F box size so each row corresponds to exactly one P&F box.
-const DEFAULT_LOG_STEP_PCT = 1.0;
+const DEFAULT_LOG_STEP_PCT = 2.0;   // matches P&F default box size
 function currentLogStepPct() {
   const s = window.DolaTsSettings?.getTsSettings?.();
   const v = s?.price_step_pct;
