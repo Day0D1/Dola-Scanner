@@ -13,6 +13,24 @@ COPY app ./app
 COPY scanner ./scanner
 COPY tests ./tests
 COPY run_app.py scan.py ./
+COPY bigsam ./bigsam
+
+# BigSam Alerts (mounted at /bigsamalerts). BIGSAM_* settings win over Dola's own env vars, so
+# Telegram/secrets never fall back to Dola's. Secrets go in the Render dashboard:
+#   BIGSAM_ADMIN_PASSWORD, BIGSAM_TELEGRAM_BOT_TOKEN, BIGSAM_TELEGRAM_CHAT_ID
+ENV BIGSAM_TELEGRAM_BOT_TOKEN="" \
+    BIGSAM_TELEGRAM_CHAT_ID="" \
+    BIGSAM_SECRET_KEY="" \
+    BIGSAM_PUBLIC_URL="https://dola-scanner.onrender.com/bigsamalerts" \
+    BIGSAM_ACCOUNT_SIZE=2500 \
+    BIGSAM_MAX_DRAWDOWN_PCT=4 \
+    BIGSAM_LTF_TIMEFRAMES="15m,1h" \
+    BIGSAM_MIN_BOS=2 \
+    BIGSAM_CHAIN_POI=reversal \
+    BIGSAM_RR_TARGET=3 \
+    BIGSAM_PARTIAL_AT_R=1.5 \
+    BIGSAM_POI_PREFERENCE=order_block \
+    BIGSAM_PROP_MODE=true
 
 # Seed universe cache so first scan doesn't have to rebuild it.
 COPY data/universe.json /seed/universe.json

@@ -374,15 +374,35 @@ async def lifespan(_app: FastAPI):
         j = _scheduler.get_job(jid)
         if j:
             print(f"[scheduler] {jid} next run: {j.next_run_time}")
+    # BigSam Alerts (FX scanner) is mounted at /bigsamalerts; Starlette doesn't run lifespans of
+    # mounted sub-apps, so its scanner + Telegram bot are started here. Failures never block Dola.
+    if _bigsam is not None:
+        try:
+            _bigsam.start_background()
+        except Exception as e:  # noqa: BLE001
+            print(f"[bigsam] background start failed: {e}")
     try:
         yield
     finally:
         if _scheduler:
             _scheduler.shutdown(wait=False)
+        if _bigsam is not None:
+            try:
+                _bigsam.stop_background()
+            except Exception:  # noqa: BLE001
+                pass
 
+
+try:  # optional: never let BigSam take Dola down
+    import bigsam.web as _bigsam
+except Exception as e:  # noqa: BLE001
+    _bigsam = None
+    print(f"[bigsam] not loaded: {e}")
 
 app = FastAPI(title="Dola Options Scanner", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+if _bigsam is not None:
+    app.mount("/bigsamalerts", _bigsam.app, name="bigsamalerts")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 # Bust the browser cache for static assets whenever the app restarts. Passed
