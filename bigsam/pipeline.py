@@ -94,6 +94,21 @@ class SeriesContext:
         return int(np.searchsorted(self.B.time, ts, side="left"))
 
 
+class TrackContext:
+    """Candles only (no analysis) for tracking open trades on a finer timeframe (5m)."""
+
+    def __init__(self, pair: str, df: pd.DataFrame, tf: str = "5m"):
+        self.pair, self.tf, self.df = pair, tf, df
+        self.B = E.Bars.from_df(df, EngineParams(), pip_size(pair))
+
+    def index_of(self, ts: int) -> int:
+        return int(np.searchsorted(self.B.time, ts, side="left"))
+
+    def candles(self, start: int, end: int) -> list[list]:
+        start, end = max(0, start), min(len(self.B) - 1, end)
+        return self.df.iloc[start:end + 1][["time", "open", "high", "low", "close"]].values.tolist()
+
+
 def setup_uid(pair: str, tf: str, c: E.Candidate) -> str:
     return f"{pair}|{tf}|{c.direction}|{c.protected_time}|{c.bos_time}"
 
@@ -142,7 +157,8 @@ def to_record(ctx: SeriesContext, c: E.Candidate, align: dict, t: int, *, source
     return rec
 
 
-def advance(rec: dict, ctx: SeriesContext, P: EngineParams, upto: int | None = None) -> list[tuple[str, int, str]]:
+def advance(rec: dict, ctx: SeriesContext, P: EngineParams, upto: int | None = None,
+            expiry_seconds: int | None = None) -> list[tuple[str, int, str]]:
     """Advance an open setup through bars after ``rec['last_bar_time']``.
 
     Fill rules (conservative):
@@ -195,7 +211,8 @@ def advance(rec: dict, ctx: SeriesContext, P: EngineParams, upto: int | None = N
                 _close(rec, "MISSED", 0.0, ts)
                 events.append(("MISSED", ts, "Price expanded beyond the target/range before the limit filled"))
                 break
-            if k - det_idx >= P.expiry_bars:
+            expired = (ts - rec["detected_bar_time"] >= expiry_seconds) if expiry_seconds else (k - det_idx >= P.expiry_bars)
+            if expired:
                 _close(rec, "EXPIRED", 0.0, ts)
                 events.append(("EXPIRED", ts, f"Limit order expired after {P.expiry_bars} bars"))
                 break

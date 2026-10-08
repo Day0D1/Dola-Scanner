@@ -10,7 +10,7 @@ import traceback
 from . import accounts, db, news, notifier, prop
 from .config import HTF_MAP, TF_SECONDS, settings
 from .data import get_provider, pip_size
-from .pipeline import OPEN_STATUSES, SeriesContext, advance, to_record
+from .pipeline import OPEN_STATUSES, SeriesContext, TrackContext, advance, to_record
 from .risk import AUDIT_LOSS_STREAK, risk_per_trade
 
 log = logging.getLogger("bigsam.scanner")
@@ -19,6 +19,8 @@ LTF_DAYS = {"5m": 8, "15m": 25, "1h": 90}
 HTF_DAYS = {"1h": 40, "4h": 240, "1d": 700}
 HTF_REFRESH = {"1h": 600, "4h": 1200, "1d": 3600}
 CATCHUP_BARS = 4
+TRACK_STEP = 300          # seconds between trade-tracking ticks (5m candles)
+TRACK_DAYS = 8
 
 
 def account() -> dict:
@@ -59,6 +61,7 @@ class Scanner:
         self.provider = get_provider()
         self.lock = threading.Lock()
         self.contexts: dict[tuple[str, str], SeriesContext] = {}
+        self.track_contexts: dict[str, TrackContext] = {}       # 5m candles of pairs with live trades
         self._htf: dict[str, tuple[float, dict]] = {}
         self.status = {"running": False, "last_run": None, "last_duration": None, "next_run": None,
                        "last_error": None, "scans": 0}
@@ -73,20 +76,23 @@ class Scanner:
     def stop(self):
         self._stop.set()
 
-    def _next_time(self) -> float:
-        step = settings.scan_interval_minutes * 60
+    def _next_tick(self) -> float:
+        """Every 5 minutes (after each 5m candle closes). Ticks that land on the scan interval run
+        the full setup scan; the others only track open/pending trades on 5m candles."""
         now = time.time()
-        return (now // step + 1) * step + settings.scan_delay_seconds
+        return (now // TRACK_STEP + 1) * TRACK_STEP + settings.scan_delay_seconds
 
     def _loop(self):
         self.run_once_safe()
         while not self._stop.is_set():
-            nxt = self._next_time()
-            self.status["next_run"] = int(nxt)
+            nxt = self._next_tick()
+            full = int((nxt - settings.scan_delay_seconds) // 60) % settings.scan_interval_minutes == 0
+            if full:
+                self.status["next_run"] = int(nxt)
             while time.time() < nxt and not self._stop.is_set():
                 time.sleep(min(5, max(0.1, nxt - time.time())))
             if not self._stop.is_set():
-                self.run_once_safe()
+                self.run_once_safe() if full else self.track_once_safe()
 
     def run_once_safe(self):
         try:
@@ -94,6 +100,40 @@ class Scanner:
         except Exception as e:
             self.status["last_error"] = f"{type(e).__name__}: {e}"
             log.error("scan failed:\n%s", traceback.format_exc())
+
+    def track_once_safe(self):
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
+            self._track_accounts()
+            self._exposure_notices()
+            self._news_warnings()
+            self.status["last_track"] = int(time.time())
+        except Exception:
+            log.error("tracking failed:\n%s", traceback.format_exc())
+        finally:
+            self.lock.release()
+
+    def _track_accounts(self):
+        """Walk every pending/open account trade through fresh 5m candles -> fill/partial/exit
+        alerts within ~6 minutes, whatever the signal timeframe."""
+        pairs = accounts.active_pairs()
+        if not pairs:
+            return
+        data = self.provider.fetch(pairs, "5m", TRACK_DAYS)
+        grouped: dict[int, list] = {}
+        for pair in pairs:
+            df = data.get(pair)
+            if df is None or df.empty:
+                continue
+            ctx = TrackContext(pair, df)
+            self.track_contexts[pair] = ctx
+            for acc, t, kind, msg in accounts.advance_trades(ctx, settings.engine):
+                grouped.setdefault(t["setup_id"], []).append((acc, t, kind, msg))
+                db.add_event(t["setup_id"], kind, f"[{acc['name']}] {msg}")
+        if settings.alert_lifecycle:
+            for evs in grouped.values():
+                notifier.send(notifier.account_events_message(evs))
 
     # ------------------------------------------------------------- data
     def _htf_data(self, htf: str) -> dict:
@@ -132,6 +172,11 @@ class Scanner:
                     except Exception as e:
                         log.error("%s %s failed:\n%s", pair, tf, traceback.format_exc())
                         stats["errors"].append(f"{pair} {tf}: {e}")
+            try:
+                self._track_accounts()
+            except Exception as e:
+                log.error("tracking failed:\n%s", traceback.format_exc())
+                stats["errors"].append(f"tracking: {e}")
             self._check_audit()
             self._news_warnings()
             self._exposure_notices()
@@ -269,14 +314,7 @@ class Scanner:
             db.update_setup(rec["id"], **fields)
             for kind, ts, msg in events:
                 db.add_event(rec["id"], kind, msg)
-        # 2) each account's own trades -> one Telegram update per setup listing every account
-        grouped: dict[int, list] = {}
-        for acc, t, kind, msg in accounts.advance_trades(ctx, settings.engine):
-            grouped.setdefault(t["setup_id"], []).append((acc, t, kind, msg))
-            db.add_event(t["setup_id"], f"{kind}", f"[{acc['name']}] {msg}")
-        if settings.alert_lifecycle:
-            for setup_id, evs in grouped.items():
-                notifier.send(notifier.account_events_message(evs))
+        # 2) account trades are tracked separately on 5m candles (_track_accounts)
 
     def _watch(self, ctx: SeriesContext, last_bar: int):
         """Confirmation-entry protocol: price taps an unmitigated HTF POI that sits in the right

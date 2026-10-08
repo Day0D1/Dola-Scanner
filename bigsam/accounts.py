@@ -11,7 +11,7 @@ import dataclasses
 import time
 
 from . import db
-from .config import EngineParams, settings
+from .config import TF_SECONDS, EngineParams, settings
 from .pipeline import advance
 from .risk import account_lots
 
@@ -53,6 +53,9 @@ EDITABLE = ("name", "currency", "start_balance", "risk_pct", "compounding", "par
 def init() -> None:
     with db.connect() as con:
         con.executescript(SCHEMA)
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(account_trades)")}
+        if "track_tf" not in cols:     # timeframe of the candles the trade is tracked on (5m)
+            con.execute("ALTER TABLE account_trades ADD COLUMN track_tf TEXT")
     if not db.one("SELECT id FROM accounts LIMIT 1"):
         now = db.now()
         for a in DEFAULTS:
@@ -144,33 +147,49 @@ def create(setup_id: int, rec: dict, plans: list[dict]) -> None:
         db.execute(
             "INSERT OR IGNORE INTO account_trades(account_id, setup_id, pair, timeframe, direction, status, "
             "skip_reason, entry, stop_loss, take_profit, partial_price, rr, range_extreme, lots, risk_amount, "
-            "stop_pips, min_lot, detected_bar_time, last_bar_time, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "stop_pips, min_lot, detected_bar_time, last_bar_time, created_at, track_tf) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (acc["id"], setup_id, rec["pair"], rec["timeframe"], rec["direction"],
              "SKIPPED" if p["skip"] else "PENDING", p["skip"], rec["entry"], rec["stop_loss"],
              rec["take_profit"], p["partial_price"], rec["rr"], rec.get("range_extreme"), p["lots"], p["risk"],
-             p["stop_pips"], int(p["min_lot"]), rec["detected_bar_time"], rec["last_bar_time"], now))
+             p["stop_pips"], int(p["min_lot"]), rec["detected_bar_time"],
+             _track_start(rec["detected_bar_time"], rec["timeframe"]), now, TRACK_TF))
 
 
 # ------------------------------------------------------------------ walk trades forward
 
+TRACK_TF = "5m"
+
+
+def _track_start(detected_bar_time: int, tf: str) -> int:
+    """last_bar_time such that the first tracked 5m candle opens when the signal bar closes."""
+    return detected_bar_time + TF_SECONDS[tf] - TF_SECONDS[TRACK_TF]
+
 EXIT_PRICE = {"WIN": "take_profit", "LOSS": "stop_loss", "PARTIAL_WIN": "entry"}
 
 
+def active_pairs() -> list[str]:
+    return [r["pair"] for r in db.rows("SELECT DISTINCT pair FROM account_trades WHERE status IN ('PENDING','TRIGGERED')")]
+
+
 def advance_trades(ctx, P: EngineParams) -> list[tuple[dict, dict, str, str]]:
-    """Advance every open account trade on this pair/timeframe. Returns (account, trade, kind, msg)."""
+    """Advance every open account trade on ``ctx.pair`` through the 5m candles in ``ctx``
+    (any signal timeframe). Returns (account, trade, kind, msg)."""
     out = []
     accs = {a["id"]: a for a in all_accounts(active_only=False)}
-    rows = db.rows("SELECT * FROM account_trades WHERE pair=? AND timeframe=? AND status IN ('PENDING','TRIGGERED')",
-                   (ctx.pair, ctx.tf))
+    rows = db.rows("SELECT * FROM account_trades WHERE pair=? AND status IN ('PENDING','TRIGGERED')", (ctx.pair,))
     for t in rows:
         acc = accs.get(t["account_id"])
         if acc is None:
             continue
+        if t.get("track_tf") != TRACK_TF:     # trade created before 5m tracking: convert its cursor once
+            t["last_bar_time"] = _track_start(t["last_bar_time"], t["timeframe"])
+            db.execute("UPDATE account_trades SET track_tf=?, last_bar_time=? WHERE id=?",
+                       (TRACK_TF, t["last_bar_time"], t["id"]))
         Pa = dataclasses.replace(P, partial_pct=acc["partial_pct"])
         was_pending = t["status"] == "PENDING"
         rec = dict(t)
-        events = advance(rec, ctx, Pa)
+        events = advance(rec, ctx, Pa, expiry_seconds=P.expiry_bars * TF_SECONDS[t["timeframe"]])
         if was_pending and rec.get("triggered_at"):
             open_now = [o for o in _open_trades(acc["id"], ("TRIGGERED",)) if o["id"] != t["id"]]
             reason = _hedge(rec, open_now)

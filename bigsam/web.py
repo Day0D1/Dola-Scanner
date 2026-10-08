@@ -197,7 +197,12 @@ def _analytics(source: str, run_id: int | None) -> dict:
 def _last_prices() -> dict[tuple[str, str], float]:
     if not scanner:
         return {}
-    return {k: float(ctx.B.c[-1]) for k, ctx in scanner.contexts.items() if len(ctx.B)}
+    out = {k: float(ctx.B.c[-1]) for k, ctx in scanner.contexts.items() if len(ctx.B)}
+    for pair, ctx in scanner.track_contexts.items():      # fresher 5m closes for pairs with live trades
+        if len(ctx.B):
+            for tf in ("5m", "15m", "1h"):
+                out[(pair, tf)] = float(ctx.B.c[-1])
+    return out
 
 
 def _prop_account() -> dict | None:
