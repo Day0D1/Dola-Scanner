@@ -402,6 +402,11 @@ except Exception as e:  # noqa: BLE001
 app = FastAPI(title="Dola Options Scanner", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 if _bigsam is not None:
+    @app.get("/bigsamalerts", include_in_schema=False)
+    def _bigsam_slash():
+        # relative redirect: the router's automatic one builds http:// URLs behind Render's proxy
+        return Response(status_code=307, headers={"Location": "/bigsamalerts/"})
+
     app.mount("/bigsamalerts", _bigsam.app, name="bigsamalerts")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
