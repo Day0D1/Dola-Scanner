@@ -1,7 +1,10 @@
 """FastAPI web app: auth, JSON API, and the single-page dashboard."""
 from __future__ import annotations
 
+import hmac
+import html
 import json
+from urllib.parse import quote
 import logging
 import threading
 import time
@@ -15,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import accounts, analytics, auth, backtest, db, notifier, prop
+from . import accounts, analytics, auth, backtest, db, execution, notifier, prop
 from .config import HTF_MAP, settings
 from .data import price_decimals
 from .scanner import Scanner, account, audit_active, loss_streak
@@ -227,6 +230,82 @@ def _prop_state() -> dict:
                         db.kv_get("prop_last_payout"), db.now())
 
 
+# ------------------------------------------------------------------ one-tap MT5 execution
+
+SHORTCUT_NAME = "BigSam Trade"
+
+
+def _exec_auth(request: Request) -> str:
+    """The iPhone Shortcut sends X-Exec-Key; the confirm page uses the dashboard login."""
+    key = execution.exec_key()
+    sent = request.headers.get("x-exec-key", "")
+    if key and sent and hmac.compare_digest(sent, key):
+        return "shortcut"
+    if request.session.get("user"):
+        return request.session["user"]
+    raise HTTPException(401, "not authorised: missing or wrong X-Exec-Key")
+
+
+def _exec_trade(token: str) -> tuple[dict, dict]:
+    t = db.one("SELECT * FROM account_trades WHERE exec_token=?", (token,))
+    if not t:
+        raise HTTPException(404, "unknown or expired link")
+    return t, accounts.get(t["account_id"])
+
+
+@app.get("/api/exec/{token}")
+def exec_preview(token: str, request: Request):
+    _exec_auth(request)
+    t, acc = _exec_trade(token)
+    can = t["status"] == "PENDING" and t["exec_status"] in (None, "failed") and execution.enabled(acc)
+    return {"summary": execution.summary(t, acc), "status": t["status"], "exec_status": t["exec_status"],
+            "can_place": can, "message": "Ready to place" if can else
+            (f"Already {t['exec_status']}" if t["exec_status"] else f"Setup is {t['status'].lower()}")}
+
+
+@app.post("/api/exec/{token}/place")
+def exec_place(token: str, request: Request):
+    who = _exec_auth(request)
+    t, acc = _exec_trade(token)
+    result = execution.place(token)
+    db.add_event(t["setup_id"], "EXEC_REQUEST", f"[{acc['name']}] place requested via {who}: {result['message']}")
+    notifier.send(notifier.exec_message(result, execution.summary(t, acc)))
+    return result
+
+
+@app.get("/x/{token}")
+def exec_page(token: str):
+    t = db.one("SELECT * FROM account_trades WHERE exec_token=?", (token,))
+    if not t:
+        return HTMLResponse("<h3>Unknown or expired link</h3>", status_code=404)
+    acc = accounts.get(t["account_id"])
+    summ = html.escape(execution.summary(t, acc))
+    state = "ready" if t["status"] == "PENDING" and t["exec_status"] in (None, "failed") else \
+        (t["exec_status"] or t["status"].lower())
+    sc = f"shortcuts://run-shortcut?name={quote(SHORTCUT_NAME)}&input=text&text={quote(token)}"
+    page = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Place trade</title><style>
+body{{font:16px -apple-system,system-ui,sans-serif;background:#0b0e13;color:#e6eaf0;margin:0;padding:24px 16px}}
+.card{{background:#131821;border:1px solid #222a37;border-radius:12px;padding:18px;max-width:520px;margin:auto}}
+code{{display:block;white-space:normal;background:#10141b;padding:12px;border-radius:8px;margin:12px 0;font-size:14px}}
+a.btn,button{{display:block;width:100%;box-sizing:border-box;text-align:center;padding:14px;border-radius:10px;border:0;
+font-size:17px;font-weight:600;margin-top:10px;text-decoration:none}} .p{{background:#f5b942;color:#1a1405}}
+.s{{background:#222a37;color:#e6eaf0}} .m{{color:#8b95a7;font-size:13px;margin-top:12px}}</style></head><body><div class="card">
+<b>BigSam · place order on MT5</b><code>{summ}</code><div>Status: <b>{html.escape(state)}</b></div>
+{"" if state != "ready" else f'''<a class="btn p" href="{sc}">Place with iPhone Shortcut</a>
+<button class="s" id="here">Place from this page (dashboard login)</button>'''}
+<div class="m" id="msg">The order is a pending limit with stop loss and take profit. Nothing is sent until you confirm.</div>
+</div><script>
+const b=document.getElementById("here");
+if(b) b.onclick=async()=>{{ if(!confirm("Place this order on MT5?")) return; b.disabled=true;
+  const r=await fetch("../api/exec/{token}/place",{{method:"POST",credentials:"same-origin"}});
+  const d=await r.json().catch(()=>({{}}));
+  document.getElementById("msg").textContent = r.status===401 ? "Log in to the dashboard in this browser first, or use the Shortcut." : (d.message||d.detail||"Done");
+  b.disabled=false; }};
+</script></body></html>"""
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
 # ------------------------------------------------------------------ accounts + trade history
 
 @app.get("/api/accounts")
@@ -259,6 +338,10 @@ class AccountEdit(BaseModel):
     max_open: int | None = Field(None, ge=1, le=20)
     prop_rules: int | None = Field(None, ge=0, le=1)
     active: int | None = Field(None, ge=0, le=1)
+    exec_mode: str | None = Field(None, pattern="^(off|metaapi)$")
+    exec_account_id: str | None = Field(None, max_length=64)
+    exec_region: str | None = Field(None, pattern="^[a-z-]{2,30}$")
+    exec_symbol_suffix: str | None = Field(None, max_length=10)
 
 
 @app.post("/api/accounts/{aid}")

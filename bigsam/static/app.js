@@ -744,6 +744,10 @@
           ${f("partial_at_r", "Partial at +R (0 = hold to TP)", "number", 'step="0.25" min="0" max="10"')}
           ${f("partial_pct", "Partial size (%)", "number", 'step="5" min="0" max="100"')}
           <label class="field">Prop-firm rules<select name="prop_rules"><option value="1" ${x.prop_rules ? "selected" : ""}>On (tracker + firm limits)</option><option value="0" ${!x.prop_rules ? "selected" : ""}>Off</option></select></label>
+          <label class="field">MT5 one-tap execution<select name="exec_mode"><option value="off" ${(x.exec_mode || "off") === "off" ? "selected" : ""}>Off (manual)</option><option value="metaapi" ${x.exec_mode === "metaapi" ? "selected" : ""}>On via MetaApi</option></select></label>
+          ${f("exec_account_id", "MetaApi account ID", "text", 'placeholder="from app.metaapi.cloud"')}
+          ${f("exec_region", "MetaApi region", "text", 'placeholder="new-york"')}
+          ${f("exec_symbol_suffix", "Broker symbol suffix", "text", 'placeholder="e.g. c for EURUSDc"')}
         </div><div style="margin-top:12px" class="actions"><button class="btn primary" type="submit">Save</button>
           <label class="note"><input type="checkbox" name="active" ${x.active ? "checked" : ""}> active (receives alerts)</label></div></div></form>`;
     };
@@ -815,7 +819,8 @@
       const body = { name: d.get("name"), currency: d.get("currency"), start_balance: Number(d.get("start_balance")),
         risk_pct: Number(d.get("risk_pct")), compounding: Number(d.get("compounding")), max_open: Number(d.get("max_open")),
         partial_at_r: Number(d.get("partial_at_r")), partial_pct: Number(d.get("partial_pct")), prop_rules: Number(d.get("prop_rules")),
-        active: d.get("active") ? 1 : 0 };
+        active: d.get("active") ? 1 : 0, exec_mode: d.get("exec_mode"), exec_account_id: d.get("exec_account_id") || "",
+        exec_region: d.get("exec_region") || "new-york", exec_symbol_suffix: d.get("exec_symbol_suffix") || "" };
       try { await api(`/api/accounts/${form.dataset.id}`, { method: "POST", body }); toast("Account saved"); renderSettings(); } catch (err) { toast(err.message); }
     }));
     $("#pwForm").onsubmit = async (e) => {

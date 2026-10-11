@@ -121,6 +121,8 @@ def _plan_lines(s: dict) -> list[str]:
         else:
             out.append("   Exit: hold the full position to TP or SL")
         out.append(f"   Loss {_money(acc, -pl['risk'], True)} · full win {_money(acc, pl['reward'], True)}")
+        if pl.get("exec_token") and PUBLIC_URL:
+            out.append(f'   👉 <a href="{PUBLIC_URL}/x/{pl["exec_token"]}"><b>Tap to place on MT5</b></a>')
         if pl["cap_full"]:
             out.append(f"   ⛔ {acc['max_open']} positions already open: don't place yet (wait for 'slot free')")
     return out
@@ -159,6 +161,11 @@ def slot_free_message(n_open: int, cap: int, pending: list[dict], acc: dict | No
             f"These setups are still valid; you may re-place them:\n{_orders(pending)}")
 
 
+def exec_message(result: dict, summary: str) -> str:
+    icon = "✅" if result.get("ok") else "⚠️"
+    return f"{icon} <b>MT5</b> — {html.escape(result.get('message', ''))}\n<code>{html.escape(summary)}</code>"
+
+
 def news_message(s: dict, ev: dict, now: int) -> str:
     pair, mins = s["pair"], max(0, round((ev["ts"] - now) / 60))
     if s["status"] == "PENDING":
@@ -175,6 +182,8 @@ def news_message(s: dict, ev: dict, now: int) -> str:
 LIFECYCLE = {
     "TRIGGERED": "✅ <b>Filled</b>",
     "PARTIAL": "💰 <b>Partial profit</b> — close part of the position and move the stop to entry",
+    "EXEC_CANCEL": "🧹 <b>MT5 order</b>",
+    "SKIPPED": "⏭ <b>Skipped</b>",
     "WIN": "🏆 <b>Take profit hit</b>",
     "PARTIAL_WIN": "🟰 <b>Runner stopped at entry</b> (partial already banked)",
     "LOSS": "❌ <b>Stop loss hit</b>",

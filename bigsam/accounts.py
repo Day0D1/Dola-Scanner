@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import time
 
-from . import db
+from . import db, execution
 from .config import TF_SECONDS, EngineParams, settings
 from .pipeline import advance
 from .risk import account_lots
@@ -47,15 +47,21 @@ DEFAULTS = [
          compounding=1, partial_at_r=0, partial_pct=50, max_open=3, prop_rules=0),
 ]
 EDITABLE = ("name", "currency", "start_balance", "risk_pct", "compounding", "partial_at_r", "partial_pct",
-            "max_open", "prop_rules", "active")
+            "max_open", "prop_rules", "active", "exec_mode", "exec_account_id", "exec_region", "exec_symbol_suffix")
+ACCOUNT_MIGRATIONS = {"exec_mode": "TEXT DEFAULT 'off'", "exec_account_id": "TEXT",
+                      "exec_region": "TEXT DEFAULT 'new-york'", "exec_symbol_suffix": "TEXT DEFAULT ''"}
+TRADE_MIGRATIONS = {"track_tf": "TEXT", "exec_token": "TEXT", "exec_status": "TEXT", "exec_order_id": "TEXT",
+                    "exec_message": "TEXT", "exec_at": "INTEGER"}
 
 
 def init() -> None:
     with db.connect() as con:
         con.executescript(SCHEMA)
-        cols = {r["name"] for r in con.execute("PRAGMA table_info(account_trades)")}
-        if "track_tf" not in cols:     # timeframe of the candles the trade is tracked on (5m)
-            con.execute("ALTER TABLE account_trades ADD COLUMN track_tf TEXT")
+        for table, migs in (("accounts", ACCOUNT_MIGRATIONS), ("account_trades", TRADE_MIGRATIONS)):
+            cols = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+            for col, typ in migs.items():
+                if col not in cols:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     if not db.one("SELECT id FROM accounts LIMIT 1"):
         now = db.now()
         for a in DEFAULTS:
@@ -144,16 +150,17 @@ def create(setup_id: int, rec: dict, plans: list[dict]) -> None:
     now = db.now()
     for p in plans:
         acc = p["account"]
+        p["exec_token"] = execution.new_token() if (execution.enabled(acc) and not p["skip"]) else None
         db.execute(
             "INSERT OR IGNORE INTO account_trades(account_id, setup_id, pair, timeframe, direction, status, "
             "skip_reason, entry, stop_loss, take_profit, partial_price, rr, range_extreme, lots, risk_amount, "
-            "stop_pips, min_lot, detected_bar_time, last_bar_time, created_at, track_tf) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "stop_pips, min_lot, detected_bar_time, last_bar_time, created_at, track_tf, exec_token) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (acc["id"], setup_id, rec["pair"], rec["timeframe"], rec["direction"],
              "SKIPPED" if p["skip"] else "PENDING", p["skip"], rec["entry"], rec["stop_loss"],
              rec["take_profit"], p["partial_price"], rec["rr"], rec.get("range_extreme"), p["lots"], p["risk"],
              p["stop_pips"], int(p["min_lot"]), rec["detected_bar_time"],
-             _track_start(rec["detected_bar_time"], rec["timeframe"]), now, TRACK_TF))
+             _track_start(rec["detected_bar_time"], rec["timeframe"]), now, TRACK_TF, p["exec_token"]))
 
 
 # ------------------------------------------------------------------ walk trades forward
@@ -199,6 +206,9 @@ def advance_trades(ctx, P: EngineParams) -> list[tuple[dict, dict, str, str]]:
                 db.execute("UPDATE account_trades SET status='SKIPPED', skip_reason=?, last_bar_time=? WHERE id=?",
                            (reason, rec["last_bar_time"], t["id"]))
                 out.append((acc, {**t, "status": "SKIPPED"}, "SKIPPED", reason))
+                note = execution.cancel_if_placed(t, acc, "exposure cap / hedge rule")
+                if note:
+                    out.append((acc, {**t, "status": "SKIPPED"}, "EXEC_CANCEL", note))
                 continue
         exit_price = rec.get(EXIT_PRICE.get(rec["status"], ""), None) if rec["status"] in EXIT_PRICE else None
         db.execute("UPDATE account_trades SET status=?, triggered_at=?, partial_at=?, closed_at=?, result_r=?, "
@@ -207,6 +217,10 @@ def advance_trades(ctx, P: EngineParams) -> list[tuple[dict, dict, str, str]]:
                     rec.get("result_r"), rec.get("pnl"), exit_price, rec["last_bar_time"], t["id"]))
         for kind, ts, msg in events:
             out.append((acc, rec, kind, msg))
+        if rec["status"] in ("MISSED", "EXPIRED"):
+            note = execution.cancel_if_placed(t, acc, rec["status"].lower())
+            if note:
+                out.append((acc, rec, "EXEC_CANCEL", note))
     return out
 
 
