@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -273,6 +273,33 @@ def exec_place(token: str, request: Request):
     return result
 
 
+def _ea_auth(request: Request) -> None:
+    key = execution.exec_key()
+    sent = request.headers.get("x-exec-key", "")
+    if not (key and sent and hmac.compare_digest(sent, key)):
+        raise HTTPException(401, "missing or wrong X-Exec-Key")
+
+
+@app.get("/api/ea/orders")
+def ea_orders(account: int, request: Request):
+    """Polled every few seconds by BigSamBridge.mq5 on the trader's PC (plain-text protocol)."""
+    _ea_auth(request)
+    execution.ea_seen(account)
+    return PlainTextResponse("\n".join(["OK"] + execution.ea_queue(account)))
+
+
+@app.post("/api/ea/report")
+async def ea_report(account: int, request: Request):
+    _ea_auth(request)
+    execution.ea_seen(account)
+    body = (await request.body()).decode("utf-8", "replace")
+    for line in body.splitlines():
+        t, text = execution.ea_report(account, line)
+        if t and text:
+            notifier.send(text)
+    return PlainTextResponse("OK")
+
+
 @app.get("/x/{token}")
 def exec_page(token: str):
     t = db.one("SELECT * FROM account_trades WHERE exec_token=?", (token,))
@@ -315,6 +342,7 @@ def list_accounts(u: str = Depends(user)):
     for a in accounts.all_accounts(active_only=False):
         s = accounts.summary(a, prices)
         s.pop("items"), s.pop("curve")
+        s["ea_last_seen"] = execution.ea_last_seen(a["id"])
         out.append(s)
     return out
 
@@ -338,7 +366,7 @@ class AccountEdit(BaseModel):
     max_open: int | None = Field(None, ge=1, le=20)
     prop_rules: int | None = Field(None, ge=0, le=1)
     active: int | None = Field(None, ge=0, le=1)
-    exec_mode: str | None = Field(None, pattern="^(off|metaapi)$")
+    exec_mode: str | None = Field(None, pattern="^(off|metaapi|ea)$")
     exec_account_id: str | None = Field(None, max_length=64)
     exec_region: str | None = Field(None, pattern="^[a-z-]{2,30}$")
     exec_symbol_suffix: str | None = Field(None, max_length=10)

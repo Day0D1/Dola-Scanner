@@ -744,7 +744,8 @@
           ${f("partial_at_r", "Partial at +R (0 = hold to TP)", "number", 'step="0.25" min="0" max="10"')}
           ${f("partial_pct", "Partial size (%)", "number", 'step="5" min="0" max="100"')}
           <label class="field">Prop-firm rules<select name="prop_rules"><option value="1" ${x.prop_rules ? "selected" : ""}>On (tracker + firm limits)</option><option value="0" ${!x.prop_rules ? "selected" : ""}>Off</option></select></label>
-          <label class="field">MT5 one-tap execution<select name="exec_mode"><option value="off" ${(x.exec_mode || "off") === "off" ? "selected" : ""}>Off (manual)</option><option value="metaapi" ${x.exec_mode === "metaapi" ? "selected" : ""}>On via MetaApi</option></select></label>
+          <label class="field">MT5 one-tap execution<select name="exec_mode"><option value="off" ${(x.exec_mode || "off") === "off" ? "selected" : ""}>Off (manual)</option><option value="ea" ${x.exec_mode === "ea" ? "selected" : ""}>On via MT5 EA (home PC)</option><option value="metaapi" ${x.exec_mode === "metaapi" ? "selected" : ""}>On via MetaApi</option></select></label>
+          <div class="field">MT5 EA status<div class="mono" style="padding:8px 0">${x.exec_mode === "ea" ? (s.ea_last_seen ? (Date.now() / 1000 - s.ea_last_seen < 60 ? '<span class="pos">● online</span>' : `<span class="neg">● offline</span> <span class="dim">last seen ${ago(s.ea_last_seen)}</span>`) : '<span class="dim">never connected</span>') : '<span class="dim">—</span>'}</div><span class="note">BigSam account ID for the EA: <b class="mono">${x.id}</b></span></div>
           ${f("exec_account_id", "MetaApi account ID", "text", 'placeholder="from app.metaapi.cloud"')}
           ${f("exec_region", "MetaApi region", "text", 'placeholder="new-york"')}
           ${f("exec_symbol_suffix", "Broker symbol suffix", "text", 'placeholder="e.g. c for EURUSDc"')}

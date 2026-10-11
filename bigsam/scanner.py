@@ -7,7 +7,7 @@ import threading
 import time
 import traceback
 
-from . import accounts, db, news, notifier, prop
+from . import accounts, db, execution, news, notifier, prop
 from .config import HTF_MAP, TF_SECONDS, settings
 from .data import get_provider, pip_size
 from .pipeline import OPEN_STATUSES, SeriesContext, TrackContext, advance, to_record
@@ -108,11 +108,21 @@ class Scanner:
             self._track_accounts()
             self._exposure_notices()
             self._news_warnings()
+            self._ea_watchdog()
             self.status["last_track"] = int(time.time())
         except Exception:
             log.error("tracking failed:\n%s", traceback.format_exc())
         finally:
             self.lock.release()
+
+    def _ea_watchdog(self):
+        """Approved orders the MT5 EA hasn't picked up after 2 minutes: PC or EA probably offline."""
+        for tr, acc in execution.ea_stale_approvals():
+            last = execution.ea_last_seen(acc["id"])
+            seen = f"last seen {round((db.now() - last) / 60)} min ago" if last else "never connected"
+            notifier.send(f"⚠️ <b>MT5 EA offline?</b> {acc['name']}: order for {tr['pair']} {tr['direction']} "
+                          f"approved but not placed ({seen}). Check that the PC is on, MT5 is open and Algo "
+                          f"Trading is enabled - or place it manually.")
 
     def _track_accounts(self):
         """Walk every pending/open account trade through fresh 5m candles -> fill/partial/exit
@@ -180,6 +190,7 @@ class Scanner:
             self._check_audit()
             self._news_warnings()
             self._exposure_notices()
+            self._ea_watchdog()
         finally:
             dur = round(time.time() - t0, 2)
             self.status.update(running=False, last_run=int(time.time()), last_duration=dur,
