@@ -145,7 +145,9 @@ def _plan_lines(s: dict) -> list[str]:
 def account_events_message(evs: list) -> str:
     """One lifecycle update for a setup, with a line per account."""
     _, t0, _, _ = evs[0]
-    lines = [f"🔔 <b>{t0['pair']} {t0['direction']}</b> ({t0['timeframe']})"]
+    lines = [f"🔔 <b>{t0['pair']} {t0['direction']}</b> ({t0['timeframe']})",
+             # identifies the original alert even when Telegram can't thread the reply
+             f"<i>Re: alert of {_ts(t0.get('detected_bar_time'))} · entry {_fmt(t0['pair'], t0.get('entry'))}</i>"]
     for acc, t, kind, msg in evs:
         label = LIFECYCLE.get(kind, kind).replace("<b>", "").replace("</b>", "")
         res = ""
