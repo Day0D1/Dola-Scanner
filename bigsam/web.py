@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import accounts, analytics, auth, backtest, db, execution, notifier, prop
+from . import accounts, analytics, auth, backtest, db, execution, ledger, notifier, prop
 from .config import HTF_MAP, settings
 from .data import price_decimals
 from .scanner import Scanner, account, audit_active, loss_streak
@@ -48,7 +48,7 @@ def bot_handler(cmd: str) -> str | None:
         return (f"<b>Status</b>: {'🚨 AUDIT' if audit_active() else '✅ ACTIVE'}\n"
                 f"Last scan: {last} · pairs {len(settings.pairs)} · TFs {', '.join(settings.ltf_timeframes)}\n"
                 f"Risk/trade: ${a['risk_per_trade']:,.0f} · loss streak {loss_streak()}\n"
-                + _prop_line())
+                + _actual_lines() + _prop_line())
     if cmd == "/open":
         rows = db.rows(f"SELECT {LIST_COLS} FROM setups WHERE source='live' AND status IN ('PENDING','TRIGGERED') "
                        "ORDER BY detected_at DESC LIMIT 15")
@@ -63,6 +63,31 @@ def bot_handler(cmd: str) -> str | None:
         return (f"<b>Live stats</b>\nTrades {s['trades']} · WR {s['win_rate']}% · Net {s['net_r']:+g}R\n"
                 f"Expectancy {s['expectancy_r']:+g}R · PF {s['profit_factor'] or '—'} · Max DD {s['max_drawdown_r']}R")
     return None
+
+
+def button_handler(data: str) -> tuple[str, str | None]:
+    """Telegram inline buttons on alerts: ``took:<account_trade_id>`` logs the trade as really taken."""
+    kind, _, arg = data.partition(":")
+    if kind != "took" or not arg.isdigit():
+        return "Unknown button", None
+    t = db.one("SELECT * FROM account_trades WHERE id=?", (int(arg),))
+    if not t:
+        return "That alert no longer exists", None
+    acc = accounts.get(t["account_id"])
+    if db.one("SELECT id FROM real_trades WHERE account_trade_id=?", (t["id"],)):
+        return f"Already logged on {acc['name']}", None
+    ledger.take(t["id"], source="telegram")
+    return (f"Logged on {acc['name']}",
+            f"✅ <b>Logged as taken</b> on {acc['name']}: {t['pair']} {t['direction']} {t['lots']} lots "
+            f"@ {t['entry']:.{price_decimals(t['pair'])}f}\n<i>It follows this alert to its exit. "
+            "If your real fill or P&amp;L differs, edit it on the History page.</i>")
+
+
+def _actual_lines() -> str:
+    out = []
+    for a in accounts.all_accounts():
+        out.append(f"{a['name']}: actual balance {accounts.fmt_money(a, ledger.balance(a))}")
+    return "\n".join(out) + "\n" if out else ""
 
 
 def _prop_line() -> str:
@@ -99,7 +124,7 @@ def start_background() -> None:
     if settings.run_scanner:
         scanner.start()
     if settings.telegram_token and settings.telegram_chat_id:
-        bot = notifier.CommandBot(bot_handler)
+        bot = notifier.CommandBot(bot_handler, on_button=button_handler)
         bot.start()
 
 
@@ -216,17 +241,12 @@ def _prop_state() -> dict:
     acc = _prop_account()
     if acc is None:
         return {"enabled": False}
-    since = db.kv_get("prop_start")
-    if since is None:
-        since = acc["tracking_start"] or db.now()
-        db.kv_set("prop_start", since)
-    trades = db.rows("SELECT pnl, closed_at FROM account_trades WHERE account_id=? "
-                     "AND status IN ('WIN','PARTIAL_WIN','LOSS') AND closed_at >= ?", (acc["id"], since))
-    prices = _last_prices()
-    floating = sum(accounts.unrealized(t, prices[(t["pair"], t["timeframe"])], acc["partial_pct"])
-                   for t in db.rows("SELECT * FROM account_trades WHERE account_id=? AND status='TRIGGERED'",
-                                    (acc["id"],)) if (t["pair"], t["timeframe"]) in prices)
-    return prop.tracker(trades, floating, acc["start_balance"], accounts.risk_amount(acc), since,
+    # the firm's limits apply to the trades really taken (actual ledger), not to every alert
+    ledger.sync_all()
+    since = acc.get("actual_since") or acc["tracking_start"] or db.now()
+    trades = [{"pnl": t["pnl"], "closed_at": t["close_time"]} for t in ledger.closed_trades(acc["id"], since)]
+    floating, _ = ledger.open_float(acc, _last_prices(), accounts.unrealized)
+    return prop.tracker(trades, floating, ledger.start(acc), accounts.risk_amount(acc), since,
                         db.kv_get("prop_last_payout"), db.now())
 
 
@@ -359,6 +379,7 @@ def list_accounts(u: str = Depends(user)):
         s = accounts.summary(a, prices)
         s.pop("items"), s.pop("curve")
         s["ea_last_seen"] = execution.ea_last_seen(a["id"])
+        s["actual_balance"] = round(ledger.balance(a), 2)
         out.append(s)
     return out
 
@@ -368,7 +389,11 @@ def account_history(aid: int, u: str = Depends(user)):
     acc = accounts.get(aid)
     if not acc:
         raise HTTPException(404, "account not found")
-    return accounts.summary(acc, _last_prices())
+    s = accounts.summary(acc, _last_prices())
+    taken = ledger.taken_ids(aid)
+    for t in s["items"]:
+        t["taken"] = t["id"] in taken
+    return s
 
 
 class AccountEdit(BaseModel):
@@ -382,6 +407,8 @@ class AccountEdit(BaseModel):
     max_open: int | None = Field(None, ge=1, le=20)
     prop_rules: int | None = Field(None, ge=0, le=1)
     active: int | None = Field(None, ge=0, le=1)
+    actual_start: float | None = Field(None, gt=0)
+    actual_since: int | None = Field(None, gt=0)
     exec_mode: str | None = Field(None, pattern="^(off|metaapi|ea)$")
     exec_account_id: str | None = Field(None, max_length=64)
     exec_region: str | None = Field(None, pattern="^[a-z-]{2,30}$")
@@ -396,6 +423,102 @@ def edit_account(aid: int, body: AccountEdit, u: str = Depends(user)):
     if acc["prop_rules"]:                       # keep the system-level risk model in step with the prop account
         db.kv_set("account_size", acc["start_balance"])
     return acc
+
+
+# ------------------------------------------------------------------ actual ledger (trades really taken)
+
+def _acc_or_404(aid: int) -> dict:
+    acc = accounts.get(aid)
+    if not acc:
+        raise HTTPException(404, "account not found")
+    return acc
+
+
+@app.get("/api/accounts/{aid}/actual")
+def account_actual(aid: int, u: str = Depends(user)):
+    acc = _acc_or_404(aid)
+    return {"account": {**acc, "unit": accounts.unit(acc)},
+            **ledger.summary(acc, _last_prices(), accounts.unrealized)}
+
+
+class RealTradeIn(BaseModel):
+    ticket: str | None = Field(None, max_length=40)
+    pair: str | None = Field(None, pattern="^[A-Za-z]{6}$")
+    direction: str | None = Field(None, pattern="^(BUY|SELL|buy|sell)$")
+    lots: float | None = Field(None, gt=0, le=1000)
+    status: str | None = Field(None, pattern="^(OPEN|CLOSED|CANCELLED)$")
+    open_time: int | None = None
+    open_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    close_time: int | None = None
+    close_price: float | None = None
+    pnl: float | None = None
+    note: str | None = Field(None, max_length=200)
+
+
+@app.post("/api/accounts/{aid}/actual/trades")
+def add_real_trade(aid: int, body: RealTradeIn, u: str = Depends(user)):
+    _acc_or_404(aid)
+    if not body.pair or not body.direction:
+        raise HTTPException(400, "pair and direction are required")
+    return ledger.add_trade(aid, **body.model_dump(exclude_none=True))
+
+
+@app.post("/api/actual/trades/{rid}")
+def edit_real_trade(rid: int, body: RealTradeIn, u: str = Depends(user)):
+    if not db.one("SELECT id FROM real_trades WHERE id=?", (rid,)):
+        raise HTTPException(404, "trade not found")
+    return ledger.edit_trade(rid, **body.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/actual/trades/{rid}")
+def delete_real_trade(rid: int, u: str = Depends(user)):
+    ledger.delete_trade(rid)
+    return {"ok": True}
+
+
+@app.post("/api/account_trades/{tid}/take")
+def take_trade(tid: int, u: str = Depends(user)):
+    r = ledger.take(tid, source="web")
+    if not r:
+        raise HTTPException(404, "alert trade not found")
+    return r
+
+
+@app.delete("/api/account_trades/{tid}/take")
+def untake_trade(tid: int, u: str = Depends(user)):
+    ledger.untake(tid)
+    return {"ok": True}
+
+
+class CashIn(BaseModel):
+    amount: float = Field(description="positive = deposit, negative = withdrawal")
+    ts: int | None = None
+    note: str = Field("", max_length=200)
+
+
+@app.post("/api/accounts/{aid}/cash")
+def add_cash(aid: int, body: CashIn, u: str = Depends(user)):
+    _acc_or_404(aid)
+    if not body.amount:
+        raise HTTPException(400, "amount must not be zero")
+    return {"id": ledger.add_cash(aid, body.amount, body.ts, body.note)}
+
+
+@app.delete("/api/cash/{cid}")
+def delete_cash(cid: int, u: str = Depends(user)):
+    ledger.delete_cash(cid)
+    return {"ok": True}
+
+
+class MatchIn(BaseModel):
+    balance: float = Field(ge=0)
+
+
+@app.post("/api/accounts/{aid}/actual/match")
+def match_balance(aid: int, body: MatchIn, u: str = Depends(user)):
+    return {"adjustment": ledger.match_balance(_acc_or_404(aid), body.balance)}
 
 
 @app.get("/api/prop")

@@ -23,7 +23,8 @@ def enabled() -> bool:
     return bool(settings.telegram_token and settings.telegram_chat_id)
 
 
-def send(text: str, chat_id: str | None = None, reply_to: int | None = None) -> int | None:
+def send(text: str, chat_id: str | None = None, reply_to: int | None = None,
+         buttons: list[list[dict]] | None = None) -> int | None:
     """Send a message; returns Telegram's message_id (truthy) or None. ``reply_to`` threads it as a
     reply to an earlier message (still delivered if that message was deleted)."""
     if not settings.telegram_token:
@@ -33,6 +34,8 @@ def send(text: str, chat_id: str | None = None, reply_to: int | None = None) -> 
     if not chat:
         return None
     payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
     if reply_to:
         payload["reply_parameters"] = {"message_id": int(reply_to), "allow_sending_without_reply": True}
     try:
@@ -44,6 +47,19 @@ def send(text: str, chat_id: str | None = None, reply_to: int | None = None) -> 
     except (httpx.HTTPError, ValueError) as e:
         log.warning("telegram send failed: %s", e)
         return None
+
+
+def _call(method: str, payload: dict) -> None:
+    try:
+        httpx.post(API.format(token=settings.telegram_token, method=method), json=payload, timeout=15)
+    except httpx.HTTPError as e:
+        log.warning("telegram %s failed: %s", method, e)
+
+
+def take_buttons(plans: list[dict]) -> list[list[dict]]:
+    """One "I took it" button per account the alert was sized for (callback ``took:<account_trade_id>``)."""
+    return [[{"text": f"✅ I took it · {p['account']['name'].split('·')[0].strip()}",
+              "callback_data": f"took:{p['trade_id']}"}] for p in plans if p.get("trade_id") and not p["skip"]]
 
 
 def send_about(setup_id: int | None, text: str) -> int | None:
@@ -240,9 +256,10 @@ def audit_message(streak: int) -> str:
 class CommandBot(threading.Thread):
     """Long-polls getUpdates and answers commands from the configured chat only."""
 
-    def __init__(self, handler):
+    def __init__(self, handler, on_button=None):
         super().__init__(daemon=True, name="telegram-bot")
         self.handler = handler
+        self.on_button = on_button      # (callback_data) -> (short toast, reply text or None)
         self.offset = 0
         self._stop = threading.Event()
 
@@ -256,6 +273,9 @@ class CommandBot(threading.Thread):
                 r = httpx.get(url, params={"timeout": 50, "offset": self.offset}, timeout=60)
                 for upd in r.json().get("result", []):
                     self.offset = upd["update_id"] + 1
+                    if upd.get("callback_query"):
+                        self._button(upd["callback_query"])
+                        continue
                     m = upd.get("message") or {}
                     chat = str((m.get("chat") or {}).get("id", ""))
                     text = (m.get("text") or "").strip()
@@ -267,3 +287,12 @@ class CommandBot(threading.Thread):
             except Exception as e:  # network hiccups must not kill the thread
                 log.debug("bot poll error: %s", e)
                 time.sleep(5)
+
+    def _button(self, cq: dict) -> None:
+        msg = cq.get("message") or {}
+        if str((msg.get("chat") or {}).get("id", "")) != str(settings.telegram_chat_id) or not self.on_button:
+            return _call("answerCallbackQuery", {"callback_query_id": cq["id"]})
+        toast, reply = self.on_button(cq.get("data") or "")
+        _call("answerCallbackQuery", {"callback_query_id": cq["id"], "text": toast})
+        if reply:
+            send(reply, reply_to=msg.get("message_id"))

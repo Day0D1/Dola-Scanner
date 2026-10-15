@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import time
 
-from . import db, execution
+from . import db, execution, ledger
 from .config import TF_SECONDS, EngineParams, settings
 from .pipeline import advance
 from .risk import account_lots
@@ -47,7 +47,7 @@ DEFAULTS = [
          compounding=1, partial_at_r=0, partial_pct=50, max_open=3, prop_rules=0),
 ]
 EDITABLE = ("name", "currency", "start_balance", "risk_pct", "compounding", "partial_at_r", "partial_pct",
-            "max_open", "prop_rules", "active", "exec_mode", "exec_account_id", "exec_region", "exec_symbol_suffix")
+            "max_open", "prop_rules", "active", "actual_start", "actual_since", "exec_mode", "exec_account_id", "exec_region", "exec_symbol_suffix")
 ACCOUNT_MIGRATIONS = {"exec_mode": "TEXT DEFAULT 'off'", "exec_account_id": "TEXT",
                       "exec_region": "TEXT DEFAULT 'new-york'", "exec_symbol_suffix": "TEXT DEFAULT ''"}
 TRADE_MIGRATIONS = {"track_tf": "TEXT", "exec_token": "TEXT", "exec_status": "TEXT", "exec_order_id": "TEXT",
@@ -93,7 +93,11 @@ def balance(acc: dict) -> float:
 
 
 def risk_amount(acc: dict) -> float:
-    base = balance(acc) if acc["compounding"] else acc["start_balance"]
+    """Compounding accounts size from the real balance once an actual ledger exists."""
+    if acc["compounding"]:
+        base = ledger.balance(acc) if acc.get("actual_start") is not None else balance(acc)
+    else:
+        base = acc["start_balance"]
     return base * acc["risk_pct"] / 100
 
 
@@ -105,7 +109,8 @@ def fmt_money(acc: dict, v: float | None, sign: bool = False) -> str:
     if v is None:
         return "—"
     if acc["currency"].upper() == "USC":
-        return f"{v:+,.0f}¢" if sign else f"{v:,.0f}¢"
+        txt = (f"{v:+,.2f}" if sign else f"{v:,.2f}").removesuffix(".00")
+        return f"{txt}¢"
     return (f"{'+' if v >= 0 else '-'}${abs(v):,.2f}" if sign else f"${v:,.2f}")
 
 
@@ -161,6 +166,8 @@ def create(setup_id: int, rec: dict, plans: list[dict]) -> None:
              rec["take_profit"], p["partial_price"], rec["rr"], rec.get("range_extreme"), p["lots"], p["risk"],
              p["stop_pips"], int(p["min_lot"]), rec["detected_bar_time"],
              _track_start(rec["detected_bar_time"], rec["timeframe"]), now, TRACK_TF, p["exec_token"]))
+        row = db.one("SELECT id FROM account_trades WHERE account_id=? AND setup_id=?", (acc["id"], setup_id))
+        p["trade_id"] = row["id"] if row else None
 
 
 # ------------------------------------------------------------------ walk trades forward

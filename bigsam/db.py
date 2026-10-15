@@ -92,8 +92,9 @@ def init() -> None:
         for col, typ in MIGRATIONS.items():
             if col not in have:
                 con.execute(f"ALTER TABLE setups ADD COLUMN {col} {typ}")
-    from . import accounts      # trading accounts + per-account trade ledger
+    from . import accounts, ledger      # trading accounts, model trade ledger, actual (real) ledger
     accounts.init()
+    ledger.init()
 
 
 def now() -> int:

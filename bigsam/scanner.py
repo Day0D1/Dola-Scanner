@@ -271,7 +271,7 @@ class Scanner:
             accounts.create(sid, rec, plans)
             rec["news"] = news.upcoming_for(rec["pair"], db.now(), 120)
             rec["plans"] = plans
-            mid = notifier.send(notifier.setup_message(rec))
+            mid = notifier.send(notifier.setup_message(rec), buttons=notifier.take_buttons(plans))
             if mid:
                 db.update_setup(sid, alerted=1, tg_message_id=mid if type(mid) is int else None)
                 db.add_event(sid, "ALERT", "Telegram alert sent")

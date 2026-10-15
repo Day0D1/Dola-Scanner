@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import db
+from . import db, ledger
 from .config import TF_SECONDS, _env, settings
 
 log = logging.getLogger("bigsam.exec")
@@ -124,6 +124,8 @@ def place(token: str) -> dict:
     db.execute("UPDATE account_trades SET exec_status=?, exec_order_id=?, exec_message=?, exec_at=? WHERE id=?",
                ("placed" if ok else "failed", data.get("orderId"), msg, now, t["id"]))
     db.add_event(t["setup_id"], "EXEC_PLACED" if ok else "EXEC_FAILED", f"[{acc['name']}] {msg}")
+    if ok:
+        ledger.take(t["id"], source="metaapi", ticket=data.get("orderId"))
     return {"ok": ok, "message": ("Order placed on MT5. " if ok else "Order NOT placed. ") + msg,
             "order_id": data.get("orderId")}
 
@@ -202,6 +204,8 @@ def ea_report(account_id: int, line: str) -> tuple[dict | None, str]:
         db.execute("UPDATE account_trades SET exec_status=?, exec_order_id=?, exec_message=?, exec_at=? WHERE id=?",
                    (status, ticket or None, msg, db.now(), t["id"]))
         text = (f"✅ MT5 EA placed order #{ticket}" if ok else f"⚠️ MT5 EA could NOT place the order: {msg}")
+        if ok:                  # placed by the EA = really taken: it goes on the actual ledger
+            ledger.take(t["id"], source="ea", ticket=ticket or None)
     else:
         status = "cancelled" if ok else "cancel_failed"
         db.execute("UPDATE account_trades SET exec_status=?, exec_message=? WHERE id=?", (status, msg, t["id"]))

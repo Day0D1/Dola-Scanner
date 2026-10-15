@@ -261,7 +261,7 @@
     const tick = (ok) => `<span class="${ok ? "pos" : "dim"}">${ok ? "✓" : "○"}</span>`;
     return `<div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>Prop firm · ${esc(p.firm)}</h2>
       <span class="actions"><span class="badge ${p.payout_eligible ? "WIN" : ""}">${p.payout_eligible ? "Payout eligible" : "Payout not yet"}</span>
-      <button class="btn sm" id="propPayout">Record payout</button><button class="btn sm" id="propReset">Start tracking now</button></span></div>
+      <button class="btn sm" id="propPayout">Record payout</button></span></div>
       <div class="panel-body"><div class="prop-grid">
         ${meter("Floating loss (closes account at limit)", -p.floating_now, p.floating_limit, `${money(p.floating_now)} / −${money(p.floating_limit)}`)}
         ${meter("Today's loss (resets 5 PM New York)", p.daily_used, p.daily_limit, `${money(-p.daily_used)} / −${money(p.daily_limit)}`)}
@@ -276,7 +276,7 @@
         <span>Payout checks: ${tick(el.valid_days)} valid days ${tick(el.consistency)} consistency ${tick(el.cycle)} 14-day cycle ${tick(el.in_profit)} in profit</span>
         <span>Your share (90%) ≈ <b>${money(p.your_share)}</b></span>
       </div>
-      <p class="note" style="margin:8px 0 0">Estimated from the alerts the system tracked, assuming you took every alert at the suggested size. Your broker dashboard is the source of truth.</p>
+      <p class="note" style="margin:8px 0 0">Calculated from the trades you logged as taken (History → Actual). Your broker dashboard is the source of truth.</p>
       </div></div>`;
   }
 
@@ -640,90 +640,222 @@
   // ------------------------------------------------------------------ history (per-account trade ledger)
   const accMoney = (acc, v, sign = false) => {
     if (v == null) return "—";
-    if ((acc.currency || "").toUpperCase() === "USC") return `${sign && v > 0 ? "+" : ""}${Math.round(v).toLocaleString()}¢`;
+    if ((acc.currency || "").toUpperCase() === "USC") return `${sign && v > 0 ? "+" : ""}${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}¢`;
     return (v < 0 ? "-$" : sign && v > 0 ? "+$" : "$") + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
   const usdNote = (acc, v) => ((acc.currency || "").toUpperCase() === "USC" && v != null ? ` <span class="dim">($${(v / 100).toFixed(2)})</span>` : "");
   const EXIT_LABEL = { WIN: "Take profit", LOSS: "Stop loss", PARTIAL_WIN: "Runner at entry", MISSED: "Missed", EXPIRED: "Expired", SKIPPED: "Skipped" };
 
+  const toUnix = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
+  const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+  const numOrNull = (v) => (v === "" || v == null ? null : Number(v));
+
   async function renderHistory(params) {
-    shell("history", `<div class="page-head"><div><h1>History</h1><p>Every alert as it would be traded on each account, sized and managed by that account's risk profile.</p></div>
+    state.histView = params.get("view") || state.histView || "actual";
+    const view = state.histView;
+    shell("history", `<div class="page-head"><div><h1>History</h1><p>${view === "actual"
+      ? "Actual: the trades you really took, plus deposits and withdrawals. This is your real balance."
+      : "Model: every alert as if you took it, sized and managed by the account's risk profile."}</p></div>
       <div class="actions" id="accTabs"></div></div><div id="histBody">${loading}</div>`);
     const accs = await api("/api/accounts");
     if (!accs.length) { $("#histBody").innerHTML = '<div class="empty">No accounts configured.</div>'; return; }
     const id = Number(params.get("account")) || accs[0].account.id;
-    $("#accTabs").innerHTML = accs.map((a) => `<a class="btn ${a.account.id === id ? "primary" : ""}" href="#/history?account=${a.account.id}">${esc(a.account.name)}</a>`).join("");
-    state.histFilter = state.histFilter || "taken";
-    const load = async () => {
-      const body = $("#histBody");
-      if (!body) return;
-      let h;
-      try { h = await api(`/api/accounts/${id}/history`); } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-      destroyCharts();
-      const acc = h.account, M = (v, s) => accMoney(acc, v, s);
-      const open = h.items.filter((t) => t.status === "TRIGGERED");
-      const pending = h.items.filter((t) => t.status === "PENDING");
-      const shown = h.items.filter((t) => state.histFilter === "all" || (state.histFilter === "taken" ? ["WIN", "LOSS", "PARTIAL_WIN", "TRIGGERED"].includes(t.status) : t.status === state.histFilter));
-      body.innerHTML = `
-        <div class="kpis">
-          <div class="kpi"><div class="label">Balance</div><div class="value">${M(h.balance)}</div><div class="sub">start ${M(acc.start_balance)}${usdNote(acc, h.balance)}</div></div>
-          <div class="kpi"><div class="label">Equity (live)</div><div class="value ${cls(h.floating)}">${M(h.equity)}</div><div class="sub">open P&L ${M(h.floating, true)}</div></div>
-          <div class="kpi"><div class="label">Net P&L</div><div class="value ${cls(h.net_pnl)}">${M(h.net_pnl, true)}</div><div class="sub">${h.return_pct > 0 ? "+" : ""}${h.return_pct}% · ${signR(h.net_r)}</div></div>
-          <div class="kpi"><div class="label">Win rate</div><div class="value">${num(h.win_rate, 1)}%</div><div class="sub">${h.full_wins} full + ${h.partial_wins} partial · ${h.losses}L</div></div>
-          <div class="kpi"><div class="label">Profit factor</div><div class="value">${h.profit_factor ?? "—"}</div><div class="sub">${h.trades} closed trades</div></div>
-          <div class="kpi"><div class="label">Max drawdown</div><div class="value neg">${M(-h.max_dd)}</div><div class="sub">${h.max_dd_pct}% of start</div></div>
-        </div>
-        <div class="panel statusbar">
-          <span>Risk now <b>${M(h.risk_now)}</b> (${acc.risk_pct}%${acc.compounding ? " of balance" : " fixed"})</span>
-          <span>Exit plan <b>${acc.partial_at_r > 0 ? `${acc.partial_pct}% at +${acc.partial_at_r}R, SL→entry, rest to TP` : "hold to TP/SL"}</b></span>
-          <span>Max open <b>${acc.max_open}</b></span><span>${acc.prop_rules ? '<span class="badge">Prop rules</span>' : '<span class="badge">Live</span>'}</span>
-          <span><b>${open.length}</b> open · <b>${pending.length}</b> pending · <b>${h.counts.SKIPPED || 0}</b> skipped</span>
-          <span class="dim">auto-refreshes every 30s</span>
-        </div>
-        <div class="grid g-main" style="margin-bottom:16px">
-          <div class="panel"><div class="panel-head"><h2>Balance over time</h2></div><div class="panel-body"><div class="chart-box">${h.curve.length > 1 ? '<canvas id="balChart"></canvas>' : '<div class="empty">The curve starts with the first closed trade.</div>'}</div></div></div>
-          <div class="panel"><div class="panel-head"><h2>Open positions</h2><span class="note">live P&L at last close</span></div><div class="panel-body">
-            ${open.length ? open.map((t) => `<a class="feed-item" href="#/setup/${t.setup_id}" style="grid-template-columns:1fr auto"><span>${dirBadge(t.direction)} <b>${esc(t.pair)}</b> <span class="dim">${t.lots} @ ${px(t.entry, t.pair)}${t.partial_at ? " · partial banked" : ""}</span></span><b class="mono ${cls(t.unrealized)}">${M(t.unrealized, true)}</b></a>`).join("") : '<div class="note">No open positions.</div>'}
-            ${pending.length ? `<div class="note" style="margin-top:10px">Pending limits: ${pending.map((t) => `${esc(t.pair)} ${t.direction} @ ${px(t.entry, t.pair)}`).join(" · ")}</div>` : ""}
-          </div></div>
-        </div>
-        <div class="panel"><div class="panel-head"><h2>Trades</h2><span class="actions">
-          <select id="histFilter">${[["taken", "Taken trades"], ["all", "Everything"], ["WIN", "Wins"], ["PARTIAL_WIN", "Partial wins"], ["LOSS", "Losses"], ["PENDING", "Pending"], ["SKIPPED", "Skipped"], ["MISSED", "Missed"], ["EXPIRED", "Expired"]].map(([v, l]) => `<option value="${v}" ${v === state.histFilter ? "selected" : ""}>${l}</option>`).join("")}</select>
-          <button class="btn sm" id="csvBtn">Download CSV</button></span></div>
-          <div class="panel-body" style="padding-top:8px">${shown.length ? `<div class="table-wrap"><table><thead><tr>
-            <th>Alert</th><th>Pair</th><th>Side</th><th>Status</th><th class="num">Lots</th><th class="num">Entry</th><th class="num">SL</th><th class="num">TP</th>
-            <th class="num">Partial</th><th>Exit</th><th class="num">R</th><th class="num">P&L</th><th class="num">Balance</th></tr></thead><tbody>
-            ${shown.map((t) => `<tr data-id="${t.setup_id}" title="${esc(t.skip_reason || "")}">
-              <td>${fmtTime(t.detected_bar_time)}</td><td><b>${esc(t.pair)}</b> <span class="dim">${esc(t.timeframe)}</span></td><td>${dirBadge(t.direction)}</td>
-              <td>${statusBadge(t.status)}</td><td class="num">${t.lots ?? "—"}</td><td class="num">${px(t.entry, t.pair)}</td><td class="num">${px(t.stop_loss, t.pair)}</td>
-              <td class="num">${px(t.take_profit, t.pair)}</td><td class="num">${t.partial_price != null ? px(t.partial_price, t.pair) + (t.partial_at ? " ✓" : "") : "—"}</td>
-              <td>${t.status === "TRIGGERED" ? `open · ${px(t.last_price, t.pair)}` : esc(EXIT_LABEL[t.status] || "")}${t.exit_price != null ? ` <span class="dim">${px(t.exit_price, t.pair)}</span>` : ""}${t.closed_at ? ` <span class="dim">${fmtTime(t.closed_at)}</span>` : ""}</td>
-              <td class="num ${cls(t.result_r)}">${t.result_r != null ? signR(t.result_r) : ""}</td>
-              <td class="num ${cls(t.pnl ?? t.unrealized)}">${t.pnl != null ? M(t.pnl, true) : t.unrealized != null ? `<span class="dim">${M(t.unrealized, true)}</span>` : ""}</td>
-              <td class="num">${t.balance_after != null ? M(t.balance_after) : ""}</td></tr>`).join("")}
-            </tbody></table></div>` : '<div class="empty">No trades yet. New alerts appear here for every account, and fill/exit as price reaches the levels.</div>'}</div></div>`;
-      if (h.curve.length > 1) {
-        chartDefaults();
-        const c = new Chart($("#balChart"), {
-          type: "line",
-          data: { labels: h.curve.map((p) => fmtTime(p.t)), datasets: [{ data: h.curve.map((p) => p.balance), borderColor: css("--accent"), borderWidth: 2, pointRadius: 2, tension: 0 }] },
-          options: { maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => { const p = h.curve[ctx.dataIndex]; return `${M(p.balance)}${p.pair ? ` · ${p.pair} ${M(p.pnl, true)}` : ""}`; } } } },
-            scales: { x: { ticks: { maxTicksLimit: 6 }, grid: { display: false } }, y: { grid: { color: css("--line") }, ticks: { callback: (v) => M(v) } } } },
-        });
-        state.charts.push(c);
-      }
-      $("#histFilter").onchange = (e) => { state.histFilter = e.target.value; load(); };
-      $("#csvBtn").onclick = () => {
-        const cols = ["detected_bar_time", "pair", "timeframe", "direction", "status", "lots", "entry", "stop_loss", "take_profit", "partial_price", "triggered_at", "closed_at", "exit_price", "result_r", "pnl", "balance_after", "skip_reason"];
-        const iso = (v) => (v ? new Date(v * 1000).toISOString() : "");
-        const rows = h.items.map((t) => cols.map((k) => (k.endsWith("_at") || k === "detected_bar_time" ? iso(t[k]) : t[k] ?? "")).map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","));
-        const blob = new Blob([[cols.join(","), ...rows].join("\n")], { type: "text/csv" });
-        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${acc.name.replace(/[^\w]+/g, "_")}_history.csv`; a.click();
-      };
-      bindRows(body);
-    };
+    const href = (aid, v) => `#/history?account=${aid}&view=${v}`;
+    $("#accTabs").innerHTML = accs.map((a) => `<a class="btn ${a.account.id === id ? "primary" : ""}" href="${href(a.account.id, view)}">${esc(a.account.name)}</a>`).join("")
+      + `<span style="width:12px"></span><a class="btn sm ${view === "actual" ? "primary" : ""}" href="${href(id, "actual")}">Actual</a><a class="btn sm ${view === "model" ? "primary" : ""}" href="${href(id, "model")}">Model</a>`;
+    const load = view === "actual" ? () => loadActual(id) : () => loadModel(id);
     await load();
-    state.timer = setInterval(load, 30000);
+    state.timer = setInterval(() => { if (!document.querySelector("#actForm form")) load(); }, 30000);
+  }
+
+  function balanceChart(curve, M) {
+    chartDefaults();
+    const c = new Chart($("#balChart"), {
+      type: "line",
+      data: { labels: curve.map((p) => fmtTime(p.t)), datasets: [{ data: curve.map((p) => p.balance), borderColor: css("--accent"), borderWidth: 2, pointRadius: 2, tension: 0 }] },
+      options: { maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => { const p = curve[ctx.dataIndex]; return `${M(p.balance)}${p.pair ? ` · ${p.pair} ${M(p.pnl, true)}` : ""}`; } } } },
+        scales: { x: { ticks: { maxTicksLimit: 6 }, grid: { display: false } }, y: { grid: { color: css("--line") }, ticks: { callback: (v) => M(v) } } } },
+    });
+    state.charts.push(c);
+  }
+
+  // ---------------------------------------------------------------- actual (real) ledger
+  async function loadActual(id) {
+    const body = $("#histBody");
+    if (!body) return;
+    let h;
+    try { h = await api(`/api/accounts/${id}/actual`); } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    destroyCharts();
+    const acc = h.account, M = (v, s) => accMoney(acc, v, s);
+    const lotWord = (acc.currency || "").toUpperCase() === "USC" ? "cent-lots" : "lots";
+    const SRC = { telegram: "Telegram ✅", web: "Dashboard", ea: "MT5 EA", metaapi: "MetaApi", manual: "Manual", import: "Imported" };
+    const realBadge = (t) => (t.status === "CLOSED" ? statusBadge((t.pnl || 0) > 0 ? "WIN" : "LOSS")
+      : t.status === "OPEN" ? (t.model_status === "PENDING" ? '<span class="badge PENDING">Pending</span>' : '<span class="badge TRIGGERED">Open</span>')
+      : '<span class="badge EXPIRED">Not filled</span>');
+    body.innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="label">Balance</div><div class="value">${M(h.balance)}</div><div class="sub">start ${M(h.start)}${h.since ? ` · ${fmtTime(h.since)}` : ""}${usdNote(acc, h.balance)}</div></div>
+        <div class="kpi"><div class="label">Equity (live)</div><div class="value ${cls(h.floating)}">${M(h.equity)}</div><div class="sub">${h.open} open · P&L ${M(h.floating, true)}</div></div>
+        <div class="kpi"><div class="label">Trading P&L</div><div class="value ${cls(h.net_pnl)}">${M(h.net_pnl, true)}</div><div class="sub">${h.return_pct > 0 ? "+" : ""}${h.return_pct}% of start</div></div>
+        <div class="kpi"><div class="label">Deposits / withdrawals</div><div class="value">${M(h.deposits - h.withdrawals, true)}</div><div class="sub">in ${M(h.deposits)} · out ${M(h.withdrawals)}</div></div>
+        <div class="kpi"><div class="label">Win rate</div><div class="value">${num(h.win_rate, 1)}%</div><div class="sub">${h.wins}W · ${h.losses}L · PF ${h.profit_factor ?? "—"}</div></div>
+        <div class="kpi"><div class="label">Max drawdown</div><div class="value neg">${M(-h.max_dd)}</div><div class="sub">${h.max_dd_pct}% of start</div></div>
+      </div>
+      <div class="panel statusbar">
+        <button class="btn sm primary" data-form="trade">+ Add trade</button>
+        <button class="btn sm" data-form="cash">+ Deposit / withdrawal</button>
+        <button class="btn sm" data-form="match">Match MT5 balance</button>
+        <span class="dim">Log an alert you took with <b>✅ I took it</b> in Telegram, or <b>Took it</b> in the Model view.</span>
+      </div>
+      <div id="actForm"></div>
+      <div class="grid g-main" style="margin-bottom:16px">
+        <div class="panel"><div class="panel-head"><h2>Balance over time</h2></div><div class="panel-body"><div class="chart-box">${h.curve.length > 1 ? '<canvas id="balChart"></canvas>' : '<div class="empty">The curve starts with your first closed trade.</div>'}</div></div></div>
+        <div class="panel"><div class="panel-head"><h2>Deposits & withdrawals</h2></div><div class="panel-body">
+          ${h.cash.length ? h.cash.map((c) => `<div class="feed-item" style="grid-template-columns:1fr auto auto"><span>${fmtTime(c.ts)} <span class="dim">${esc(c.note || (c.amount > 0 ? "Deposit" : "Withdrawal"))}</span></span><b class="mono ${cls(c.amount)}">${M(c.amount, true)}</b><button class="btn sm" data-delcash="${c.id}" title="Delete">✕</button></div>`).join("") : '<div class="note">None recorded.</div>'}
+        </div></div>
+      </div>
+      <div class="panel"><div class="panel-head"><h2>Trades taken</h2><span class="note">P&L follows the alert unless you edit it</span></div>
+        <div class="panel-body" style="padding-top:8px">${h.items.length ? `<div class="table-wrap"><table><thead><tr>
+          <th>Opened</th><th>Pair</th><th>Side</th><th>Status</th><th class="num">Lots</th><th class="num">Entry</th><th class="num">Exit</th><th>Closed</th>
+          <th class="num">P&L</th><th class="num">Balance</th><th>Source</th><th></th></tr></thead><tbody>
+          ${h.items.map((t) => `<tr style="cursor:default" title="${esc(t.note || "")}">
+            <td>${t.open_time ? fmtTime(t.open_time) : '<span class="dim">not filled yet</span>'}</td><td><b>${esc(t.pair)}</b>${t.ticket ? ` <span class="dim">#${esc(t.ticket)}</span>` : ""}</td><td>${dirBadge(t.direction)}</td>
+            <td>${realBadge(t)}</td>
+            <td class="num">${t.lots ?? "—"}</td><td class="num">${px(t.open_price, t.pair)}</td><td class="num">${t.status === "OPEN" && t.last_price != null ? `<span class="dim">${px(t.last_price, t.pair)}</span>` : px(t.close_price, t.pair)}</td>
+            <td>${t.close_time ? fmtTime(t.close_time) : ""}</td>
+            <td class="num ${cls(t.pnl ?? t.unrealized)}">${t.pnl != null ? M(t.pnl, true) + (t.pnl_manual ? "" : ' <span class="dim" title="from the alert">≈</span>') : t.unrealized != null ? `<span class="dim">${M(t.unrealized, true)}</span>` : ""}</td>
+            <td class="num">${t.balance_after != null ? M(t.balance_after) : ""}</td>
+            <td>${esc(SRC[t.source] || t.source || "")}${t.setup_id ? ` · <a href="#/setup/${t.setup_id}">alert</a>` : ""}</td>
+            <td style="white-space:nowrap"><button class="btn sm" data-edit="${t.id}">Edit</button> <button class="btn sm" data-del="${t.id}" title="Delete">✕</button></td></tr>`).join("")}
+          </tbody></table></div>` : '<div class="empty">No trades logged yet.</div>'}</div></div>`;
+    if (h.curve.length > 1) balanceChart(h.curve, M);
+
+    const formBox = $("#actForm");
+    const field = (name, label, type = "text", extra = "") => `<label class="field">${label}<input type="${type}" name="${name}" ${extra}></label>`;
+    const panel = (title, inner, submit) => `<form class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>${title}</h2></div><div class="panel-body">
+      <div class="grid g-3" style="gap:12px">${inner}</div><div class="actions" style="margin-top:12px"><button class="btn primary" type="submit">${submit}</button><button class="btn" type="button" data-cancel>Cancel</button></div></div></form>`;
+    const tradeForm = (t = {}) => panel(t.id ? `Edit trade · ${esc(t.pair)}` : "Add a trade you took", `
+      ${field("pair", "Pair", "text", `value="${esc(t.pair || "")}" placeholder="EURUSD" required pattern="[A-Za-z]{6}"`)}
+      <label class="field">Side<select name="direction"><option ${t.direction === "BUY" ? "selected" : ""}>BUY</option><option ${t.direction === "SELL" ? "selected" : ""}>SELL</option></select></label>
+      ${field("lots", `Size (${lotWord})`, "number", `step="0.01" min="0.01" value="${t.lots ?? ""}"`)}
+      ${field("open_time", "Opened", "datetime-local", `value="${t.open_time ? new Date((t.open_time - new Date().getTimezoneOffset() * 60) * 1000).toISOString().slice(0, 16) : nowLocal()}"`)}
+      ${field("open_price", "Entry price", "number", `step="any" value="${t.open_price ?? ""}"`)}
+      ${field("ticket", "Ticket (optional)", "text", `value="${esc(t.ticket || "")}"`)}
+      ${field("close_time", "Closed (blank = still open)", "datetime-local", `value="${t.close_time ? new Date((t.close_time - new Date().getTimezoneOffset() * 60) * 1000).toISOString().slice(0, 16) : ""}"`)}
+      ${field("close_price", "Exit price", "number", `step="any" value="${t.close_price ?? ""}"`)}
+      ${field("pnl", `Real P&L (${acc.currency === "USC" ? "¢" : "$"}, blank = still open)`, "number", `step="any" value="${t.pnl ?? ""}"`)}
+      ${field("note", "Note", "text", `value="${esc(t.note || "")}"`)}`, t.id ? "Save" : "Add trade");
+    const show = (html, onSubmit) => {
+      formBox.innerHTML = html;
+      const f = formBox.querySelector("form");
+      f.querySelector("[data-cancel]").onclick = () => (formBox.innerHTML = "");
+      f.onsubmit = async (e) => { e.preventDefault(); try { await onSubmit(new FormData(f)); formBox.innerHTML = ""; await loadActual(id); } catch (err) { toast(err.message); } };
+      f.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+    const tradeBody = (d) => {
+      const pnl = numOrNull(d.get("pnl"));
+      return { pair: d.get("pair").toUpperCase(), direction: d.get("direction"), lots: numOrNull(d.get("lots")), ticket: d.get("ticket") || null,
+        open_time: toUnix(d.get("open_time")), open_price: numOrNull(d.get("open_price")), close_time: toUnix(d.get("close_time")),
+        close_price: numOrNull(d.get("close_price")), pnl, status: pnl == null ? "OPEN" : "CLOSED", note: d.get("note") || null };
+    };
+    body.querySelectorAll("[data-form]").forEach((b) => (b.onclick = () => {
+      const kind = b.dataset.form;
+      if (kind === "trade") show(tradeForm(), async (d) => { await api(`/api/accounts/${id}/actual/trades`, { method: "POST", body: tradeBody(d) }); toast("Trade added"); });
+      if (kind === "cash") show(panel("Deposit or withdrawal", `
+        <label class="field">Type<select name="kind"><option value="-1">Withdrawal</option><option value="1">Deposit</option></select></label>
+        ${field("amount", `Amount (${acc.currency === "USC" ? "¢" : "$"})`, "number", 'step="any" min="0.01" required')}
+        ${field("ts", "Date", "datetime-local", `value="${nowLocal()}"`)}${field("note", "Note")}`, "Save"),
+        async (d) => { await api(`/api/accounts/${id}/cash`, { method: "POST", body: { amount: Number(d.get("kind")) * Number(d.get("amount")), ts: toUnix(d.get("ts")), note: d.get("note") || "" } }); toast("Saved"); });
+      if (kind === "match") show(panel("Match your MT5 balance", `
+        ${field("balance", `Balance shown in MT5 (${acc.currency === "USC" ? "¢" : "$"})`, "number", `step="any" min="0" required value="${h.balance}"`)}
+        <div class="note" style="align-self:end">Books the difference as an adjustment so this page equals MT5. Use it for swaps, commissions or anything not logged.</div>`, "Match"),
+        async (d) => { const r = await api(`/api/accounts/${id}/actual/match`, { method: "POST", body: { balance: Number(d.get("balance")) } }); toast(r.adjustment ? `Adjusted by ${M(r.adjustment, true)}` : "Already matching"); });
+    }));
+    body.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
+      const t = h.items.find((x) => x.id === Number(b.dataset.edit));
+      show(tradeForm(t), async (d) => { await api(`/api/actual/trades/${t.id}`, { method: "POST", body: tradeBody(d) }); toast("Trade saved"); });
+    }));
+    body.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+      if (!confirm("Remove this trade from your actual history? (Nothing changes in MT5.)")) return;
+      try { await api(`/api/actual/trades/${b.dataset.del}`, { method: "DELETE" }); await loadActual(id); } catch (e) { toast(e.message); }
+    }));
+    body.querySelectorAll("[data-delcash]").forEach((b) => (b.onclick = async () => {
+      if (!confirm("Delete this deposit / withdrawal?")) return;
+      try { await api(`/api/cash/${b.dataset.delcash}`, { method: "DELETE" }); await loadActual(id); } catch (e) { toast(e.message); }
+    }));
+  }
+
+  // ---------------------------------------------------------------- model (every alert)
+  async function loadModel(id) {
+    const body = $("#histBody");
+    if (!body) return;
+    state.histFilter = state.histFilter || "taken";
+    let h;
+    try { h = await api(`/api/accounts/${id}/history`); } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    destroyCharts();
+    const acc = h.account, M = (v, s) => accMoney(acc, v, s);
+    const open = h.items.filter((t) => t.status === "TRIGGERED");
+    const pending = h.items.filter((t) => t.status === "PENDING");
+    const shown = h.items.filter((t) => state.histFilter === "all" || (state.histFilter === "taken" ? ["WIN", "LOSS", "PARTIAL_WIN", "TRIGGERED"].includes(t.status) : state.histFilter === "mine" ? t.taken : t.status === state.histFilter));
+    body.innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="label">Model balance</div><div class="value">${M(h.balance)}</div><div class="sub">start ${M(acc.start_balance)}${usdNote(acc, h.balance)}</div></div>
+        <div class="kpi"><div class="label">Equity (live)</div><div class="value ${cls(h.floating)}">${M(h.equity)}</div><div class="sub">open P&L ${M(h.floating, true)}</div></div>
+        <div class="kpi"><div class="label">Net P&L</div><div class="value ${cls(h.net_pnl)}">${M(h.net_pnl, true)}</div><div class="sub">${h.return_pct > 0 ? "+" : ""}${h.return_pct}% · ${signR(h.net_r)}</div></div>
+        <div class="kpi"><div class="label">Win rate</div><div class="value">${num(h.win_rate, 1)}%</div><div class="sub">${h.full_wins} full + ${h.partial_wins} partial · ${h.losses}L</div></div>
+        <div class="kpi"><div class="label">Profit factor</div><div class="value">${h.profit_factor ?? "—"}</div><div class="sub">${h.trades} closed trades</div></div>
+        <div class="kpi"><div class="label">Max drawdown</div><div class="value neg">${M(-h.max_dd)}</div><div class="sub">${h.max_dd_pct}% of start</div></div>
+      </div>
+      <div class="panel statusbar">
+        <span>Risk now <b>${M(h.risk_now)}</b> (${acc.risk_pct}%${acc.compounding ? " of balance" : " fixed"})</span>
+        <span>Exit plan <b>${acc.partial_at_r > 0 ? `${acc.partial_pct}% at +${acc.partial_at_r}R, SL→entry, rest to TP` : "hold to TP/SL"}</b></span>
+        <span>Max open <b>${acc.max_open}</b></span><span>${acc.prop_rules ? '<span class="badge">Prop rules</span>' : '<span class="badge">Live</span>'}</span>
+        <span><b>${open.length}</b> open · <b>${pending.length}</b> pending · <b>${h.counts.SKIPPED || 0}</b> skipped</span>
+        <span class="dim">auto-refreshes every 30s</span>
+      </div>
+      <div class="grid g-main" style="margin-bottom:16px">
+        <div class="panel"><div class="panel-head"><h2>Model balance over time</h2></div><div class="panel-body"><div class="chart-box">${h.curve.length > 1 ? '<canvas id="balChart"></canvas>' : '<div class="empty">The curve starts with the first closed trade.</div>'}</div></div></div>
+        <div class="panel"><div class="panel-head"><h2>Open positions</h2><span class="note">live P&L at last close</span></div><div class="panel-body">
+          ${open.length ? open.map((t) => `<a class="feed-item" href="#/setup/${t.setup_id}" style="grid-template-columns:1fr auto"><span>${dirBadge(t.direction)} <b>${esc(t.pair)}</b> <span class="dim">${t.lots} @ ${px(t.entry, t.pair)}${t.partial_at ? " · partial banked" : ""}</span></span><b class="mono ${cls(t.unrealized)}">${M(t.unrealized, true)}</b></a>`).join("") : '<div class="note">No open positions.</div>'}
+          ${pending.length ? `<div class="note" style="margin-top:10px">Pending limits: ${pending.map((t) => `${esc(t.pair)} ${t.direction} @ ${px(t.entry, t.pair)}`).join(" · ")}</div>` : ""}
+        </div></div>
+      </div>
+      <div class="panel"><div class="panel-head"><h2>Alerts</h2><span class="actions">
+        <select id="histFilter">${[["taken", "Filled (model)"], ["mine", "Taken by me"], ["all", "Everything"], ["WIN", "Wins"], ["PARTIAL_WIN", "Partial wins"], ["LOSS", "Losses"], ["PENDING", "Pending"], ["SKIPPED", "Skipped"], ["MISSED", "Missed"], ["EXPIRED", "Expired"]].map(([v, l]) => `<option value="${v}" ${v === state.histFilter ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <button class="btn sm" id="csvBtn">Download CSV</button></span></div>
+        <div class="panel-body" style="padding-top:8px">${shown.length ? `<div class="table-wrap"><table><thead><tr>
+          <th>Alert</th><th>Pair</th><th>Side</th><th>Status</th><th class="num">Lots</th><th class="num">Entry</th><th class="num">SL</th><th class="num">TP</th>
+          <th class="num">Partial</th><th>Exit</th><th class="num">R</th><th class="num">P&L</th><th class="num">Balance</th><th>Taken?</th></tr></thead><tbody>
+          ${shown.map((t) => `<tr data-id="${t.setup_id}" title="${esc(t.skip_reason || "")}">
+            <td>${fmtTime(t.detected_bar_time)}</td><td><b>${esc(t.pair)}</b> <span class="dim">${esc(t.timeframe)}</span></td><td>${dirBadge(t.direction)}</td>
+            <td>${statusBadge(t.status)}</td><td class="num">${t.lots ?? "—"}</td><td class="num">${px(t.entry, t.pair)}</td><td class="num">${px(t.stop_loss, t.pair)}</td>
+            <td class="num">${px(t.take_profit, t.pair)}</td><td class="num">${t.partial_price != null ? px(t.partial_price, t.pair) + (t.partial_at ? " ✓" : "") : "—"}</td>
+            <td>${t.status === "TRIGGERED" ? `open · ${px(t.last_price, t.pair)}` : esc(EXIT_LABEL[t.status] || "")}${t.exit_price != null ? ` <span class="dim">${px(t.exit_price, t.pair)}</span>` : ""}${t.closed_at ? ` <span class="dim">${fmtTime(t.closed_at)}</span>` : ""}</td>
+            <td class="num ${cls(t.result_r)}">${t.result_r != null ? signR(t.result_r) : ""}</td>
+            <td class="num ${cls(t.pnl ?? t.unrealized)}">${t.pnl != null ? M(t.pnl, true) : t.unrealized != null ? `<span class="dim">${M(t.unrealized, true)}</span>` : ""}</td>
+            <td class="num">${t.balance_after != null ? M(t.balance_after) : ""}</td>
+            <td>${t.status === "SKIPPED" ? "" : `<button class="btn sm ${t.taken ? "primary" : ""}" data-take="${t.id}" data-taken="${t.taken ? 1 : 0}">${t.taken ? "✓ Taken" : "Took it"}</button>`}</td></tr>`).join("")}
+          </tbody></table></div>` : '<div class="empty">No trades yet. New alerts appear here for every account, and fill/exit as price reaches the levels.</div>'}</div></div>`;
+    if (h.curve.length > 1) balanceChart(h.curve, M);
+    $("#histFilter").onchange = (e) => { state.histFilter = e.target.value; loadModel(id); };
+    $("#csvBtn").onclick = () => {
+      const cols = ["detected_bar_time", "pair", "timeframe", "direction", "status", "lots", "entry", "stop_loss", "take_profit", "partial_price", "triggered_at", "closed_at", "exit_price", "result_r", "pnl", "balance_after", "taken", "skip_reason"];
+      const iso = (v) => (v ? new Date(v * 1000).toISOString() : "");
+      const rows = h.items.map((t) => cols.map((k) => (k.endsWith("_at") || k === "detected_bar_time" ? iso(t[k]) : t[k] ?? "")).map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","));
+      const blob = new Blob([[cols.join(","), ...rows].join("\n")], { type: "text/csv" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${acc.name.replace(/[^\w]+/g, "_")}_model.csv`; a.click();
+    };
+    body.querySelectorAll("[data-take]").forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      const taken = b.dataset.taken === "1";
+      if (taken && !confirm("Remove this trade from your actual history?")) return;
+      try {
+        await api(`/api/account_trades/${b.dataset.take}/take`, { method: taken ? "DELETE" : "POST" });
+        toast(taken ? "Removed from actual history" : "Logged as taken — it now counts in Actual");
+        await loadModel(id);
+      } catch (err) { toast(err.message); }
+    }));
+    bindRows(body);
   }
 
   async function renderSettings() {
@@ -733,7 +865,7 @@
     const accForm = (s) => {
       const x = s.account;
       const f = (k, label, type = "number", extra = "") => `<label class="field">${label}<input type="${type}" name="${k}" value="${esc(x[k])}" ${extra}></label>`;
-      return `<form class="panel accForm" data-id="${x.id}"><div class="panel-head"><h2>${esc(x.name)}</h2><span class="note">balance now ${accMoney(x, s.balance)}</span></div>
+      return `<form class="panel accForm" data-id="${x.id}"><div class="panel-head"><h2>${esc(x.name)}</h2><span class="note">actual balance ${accMoney(x, s.actual_balance)} · model ${accMoney(x, s.balance)}</span></div>
         <div class="panel-body"><div class="grid g-3" style="gap:12px">
           ${f("name", "Name", "text")}
           <label class="field">Currency<select name="currency"><option value="USD" ${x.currency === "USD" ? "selected" : ""}>USD ($)</option><option value="USC" ${x.currency === "USC" ? "selected" : ""}>USC (cents)</option></select></label>
