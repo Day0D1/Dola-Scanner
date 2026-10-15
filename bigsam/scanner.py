@@ -120,7 +120,7 @@ class Scanner:
         for tr, acc in execution.ea_stale_approvals():
             last = execution.ea_last_seen(acc["id"])
             seen = f"last seen {round((db.now() - last) / 60)} min ago" if last else "never connected"
-            notifier.send(f"⚠️ <b>MT5 EA offline?</b> {acc['name']}: order for {tr['pair']} {tr['direction']} "
+            notifier.send_about(tr["setup_id"], f"⚠️ <b>MT5 EA offline?</b> {acc['name']}: order for {tr['pair']} {tr['direction']} "
                           f"approved but not placed ({seen}). Check that the PC is on, MT5 is open and Algo "
                           f"Trading is enabled - or place it manually.")
 
@@ -142,8 +142,8 @@ class Scanner:
                 grouped.setdefault(t["setup_id"], []).append((acc, t, kind, msg))
                 db.add_event(t["setup_id"], kind, f"[{acc['name']}] {msg}")
         if settings.alert_lifecycle:
-            for evs in grouped.values():
-                notifier.send(notifier.account_events_message(evs))
+            for setup_id, evs in grouped.items():
+                notifier.send_about(setup_id, notifier.account_events_message(evs))
 
     # ------------------------------------------------------------- data
     def _htf_data(self, htf: str) -> dict:
@@ -271,8 +271,9 @@ class Scanner:
             accounts.create(sid, rec, plans)
             rec["news"] = news.upcoming_for(rec["pair"], db.now(), 120)
             rec["plans"] = plans
-            if notifier.send(notifier.setup_message(rec)):
-                db.update_setup(sid, alerted=1)
+            mid = notifier.send(notifier.setup_message(rec))
+            if mid:
+                db.update_setup(sid, alerted=1, tg_message_id=mid if type(mid) is int else None)
                 db.add_event(sid, "ALERT", "Telegram alert sent")
         elif suppressed:
             db.add_event(sid, "SUPPRESSED", "Alert suppressed: system in AUDIT state")
@@ -311,7 +312,7 @@ class Scanner:
                 db.kv_set(key, now)
                 msg = notifier.news_message(s, ev, now)
                 db.add_event(s["id"], "NEWS", msg.split("\n")[0].replace("<b>", "").replace("</b>", ""))
-                notifier.send(msg)
+                notifier.send_about(s["id"], msg)
 
     def _advance_open(self, ctx: SeriesContext):
         # 1) the system record of every setup (strategy statistics, no account rules)

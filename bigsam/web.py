@@ -269,7 +269,7 @@ def exec_place(token: str, request: Request):
     t, acc = _exec_trade(token)
     result = execution.place(token)
     db.add_event(t["setup_id"], "EXEC_REQUEST", f"[{acc['name']}] place requested via {who}: {result['message']}")
-    notifier.send(notifier.exec_message(result, execution.summary(t, acc)))
+    notifier.send_about(t["setup_id"], notifier.exec_message(result, execution.summary(t, acc)))
     return result
 
 
@@ -296,7 +296,7 @@ async def ea_report(account: int, request: Request):
     for line in body.splitlines():
         t, text = execution.ea_report(account, line)
         if t and text:
-            notifier.send(text)
+            notifier.send_about(t["setup_id"], text)
     return PlainTextResponse("OK")
 
 

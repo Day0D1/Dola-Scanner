@@ -80,6 +80,7 @@ def connect():
 MIGRATIONS = {   # columns added after the first release: name -> type
     "partial_price": "REAL",
     "partial_at": "INTEGER",
+    "tg_message_id": "INTEGER",    # Telegram id of the setup alert; follow-ups reply to it
 }
 
 

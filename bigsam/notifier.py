@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from . import db
 from .config import _env, settings
 from .data import price_decimals
 
@@ -22,23 +23,36 @@ def enabled() -> bool:
     return bool(settings.telegram_token and settings.telegram_chat_id)
 
 
-def send(text: str, chat_id: str | None = None) -> bool:
+def send(text: str, chat_id: str | None = None, reply_to: int | None = None) -> int | None:
+    """Send a message; returns Telegram's message_id (truthy) or None. ``reply_to`` threads it as a
+    reply to an earlier message (still delivered if that message was deleted)."""
     if not settings.telegram_token:
         log.info("telegram disabled; message:\n%s", text)
-        return False
+        return None
     chat = chat_id or settings.telegram_chat_id
     if not chat:
-        return False
+        return None
+    payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": int(reply_to), "allow_sending_without_reply": True}
     try:
-        r = httpx.post(API.format(token=settings.telegram_token, method="sendMessage"),
-                       json={"chat_id": chat, "text": text, "parse_mode": "HTML",
-                             "disable_web_page_preview": True}, timeout=15)
+        r = httpx.post(API.format(token=settings.telegram_token, method="sendMessage"), json=payload, timeout=15)
         if r.status_code != 200:
             log.warning("telegram error %s: %s", r.status_code, r.text[:200])
-        return r.status_code == 200
-    except httpx.HTTPError as e:
+            return None
+        return (r.json().get("result") or {}).get("message_id") or True
+    except (httpx.HTTPError, ValueError) as e:
         log.warning("telegram send failed: %s", e)
-        return False
+        return None
+
+
+def send_about(setup_id: int | None, text: str) -> int | None:
+    """Send a follow-up about a trade as a reply to that setup's original alert."""
+    reply_to = None
+    if setup_id:
+        row = db.one("SELECT tg_message_id FROM setups WHERE id=?", (setup_id,))
+        reply_to = row["tg_message_id"] if row else None
+    return send(text, reply_to=reply_to)
 
 
 def _fmt(pair: str, x) -> str:
