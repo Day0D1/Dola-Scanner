@@ -27,7 +27,9 @@ def _list(name: str, default: str) -> list[str]:
 
 DEFAULT_PAIRS = (
     "EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD,NZDUSD,"
-    "EURJPY,GBPJPY,EURGBP,AUDJPY,EURAUD,GBPAUD,EURCHF,CADJPY,GBPCHF"
+    "EURJPY,GBPJPY,EURGBP,AUDJPY,EURAUD,GBPAUD,EURCHF,CADJPY,GBPCHF,"
+    # the remaining 12 crosses of the 8 majors (backtested Oct 2026: in line with the first 16)
+    "AUDCAD,AUDCHF,AUDNZD,CADCHF,CHFJPY,EURCAD,EURNZD,GBPCAD,GBPNZD,NZDCAD,NZDCHF,NZDJPY"
 )
 
 # LTF -> HTF mapping (spec section 5: LTF 15m/1h, HTF 4h/Daily)
