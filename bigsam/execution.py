@@ -17,6 +17,7 @@ import httpx
 
 from . import db, ledger
 from .config import TF_SECONDS, _env, settings
+from .pipeline import cancel_level
 
 log = logging.getLogger("bigsam.exec")
 OK_CODES = {"TRADE_RETCODE_DONE", "TRADE_RETCODE_PLACED", "TRADE_RETCODE_DONE_PARTIAL"}
@@ -158,6 +159,8 @@ def cancel_if_placed(t: dict, acc: dict, reason: str) -> str | None:
 #   GET  /api/ea/orders?account=<id>  ->  "OK" then one line per action:
 #        PLACE|<trade id>|<symbol>|BUY|SELL|<volume>|<price>|<sl>|<tp>|<expiry unix UTC>|<comment>
 #        CANCEL|<trade id>|<ticket>
+#        WATCH|<trade id>|<ticket>|<BUY|SELL>|<miss level>   (EA deletes the order itself the moment
+#                                                     price reaches the level, without waiting for us)
 #   POST /api/ea/report   body: "<trade id>|PLACE|CANCEL|<1|0>|<ticket>|<message>"
 
 def ea_seen(account_id: int) -> None:
@@ -185,6 +188,9 @@ def ea_queue(account_id: int) -> list[str]:
     for t in db.rows("SELECT * FROM account_trades WHERE account_id=? AND exec_status='cancel_requested'",
                      (account_id,)):
         lines.append(f"CANCEL|{t['id']}|{t['exec_order_id']}")
+    for t in db.rows("SELECT * FROM account_trades WHERE account_id=? AND exec_status='placed' AND status='PENDING' "
+                     "AND exec_order_id IS NOT NULL", (account_id,)):
+        lines.append(f"WATCH|{t['id']}|{t['exec_order_id']}|{t['direction']}|{cancel_level(t)}")
     return lines
 
 
@@ -209,6 +215,9 @@ def ea_report(account_id: int, line: str) -> tuple[dict | None, str]:
     else:
         status = "cancelled" if ok else "cancel_failed"
         db.execute("UPDATE account_trades SET exec_status=?, exec_message=? WHERE id=?", (status, msg, t["id"]))
+        if ok:                  # the order is gone from MT5, so it can't fill: it never becomes a real trade
+            db.execute("UPDATE real_trades SET status='CANCELLED', close_time=?, pnl=0 WHERE account_trade_id=? "
+                       "AND status='OPEN'", (db.now(), t["id"]))
         text = (f"🧹 MT5 EA cancelled order #{ticket}" if ok else
                 f"⚠️ MT5 EA could not cancel order #{ticket}: {msg} (check MT5 - it may have filled)")
     db.add_event(t["setup_id"], f"EA_{action}", f"[{acc['name']}] {text}")

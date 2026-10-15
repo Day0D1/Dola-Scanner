@@ -157,6 +157,14 @@ def to_record(ctx: SeriesContext, c: E.Candidate, align: dict, t: int, *, source
     return rec
 
 
+def cancel_level(rec: dict) -> float:
+    """Price beyond which a still-pending limit order counts as MISSED."""
+    entry, sl, tp = rec["entry"], rec["stop_loss"], rec["take_profit"]
+    rx = rec.get("range_extreme") or tp
+    r3 = entry + 3.0 * (entry - sl)
+    return max(tp, rx, r3) if rec["direction"] == "BUY" else min(tp, rx, r3)
+
+
 def advance(rec: dict, ctx: SeriesContext, P: EngineParams, upto: int | None = None,
             expiry_seconds: int | None = None) -> list[tuple[str, int, str]]:
     """Advance an open setup through bars after ``rec['last_bar_time']``.
@@ -183,9 +191,7 @@ def advance(rec: dict, ctx: SeriesContext, P: EngineParams, upto: int | None = N
     # A pending order is cancelled only once price runs beyond the target, the range extreme that
     # existed at detection AND the 3R level - so the order lives for the same window whatever
     # RR_TARGET is (a closer target must not mean more cancellations).
-    rx = rec.get("range_extreme") or tp
-    r3 = entry + 3.0 * (entry - sl)
-    cancel = max(tp, rx, r3) if buy else min(tp, rx, r3)
+    cancel = cancel_level(rec)
     part = rec.get("partial_price")
     part_r = round(abs(part - entry) / abs(entry - sl), 4) if part is not None else 0.0
     frac = P.partial_pct / 100.0
