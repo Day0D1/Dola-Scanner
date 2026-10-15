@@ -317,18 +317,34 @@ body{{font:16px -apple-system,system-ui,sans-serif;background:#0b0e13;color:#e6e
 code{{display:block;white-space:normal;background:#10141b;padding:12px;border-radius:8px;margin:12px 0;font-size:14px}}
 a.btn,button{{display:block;width:100%;box-sizing:border-box;text-align:center;padding:14px;border-radius:10px;border:0;
 font-size:17px;font-weight:600;margin-top:10px;text-decoration:none}} .p{{background:#f5b942;color:#1a1405}}
-.s{{background:#222a37;color:#e6eaf0}} .m{{color:#8b95a7;font-size:13px;margin-top:12px}}</style></head><body><div class="card">
-<b>BigSam · place order on MT5</b><code>{summ}</code><div>Status: <b>{html.escape(state)}</b></div>
-{"" if state != "ready" else f'''<a class="btn p" href="{sc}">Place with iPhone Shortcut</a>
-<button class="s" id="here">Place from this page (dashboard login)</button>'''}
-<div class="m" id="msg">The order is a pending limit with stop loss and take profit. Nothing is sent until you confirm.</div>
+.s{{background:#222a37;color:#e6eaf0}} .m{{color:#8b95a7;font-size:13px;margin-top:12px}}
+input{{display:block;width:100%;box-sizing:border-box;padding:12px;margin-top:8px;border-radius:8px;border:1px solid #2c3646;
+background:#10141b;color:#e6eaf0;font-size:16px}} #login{{display:none;margin-top:14px}} .ok{{color:#2ec27e}} .bad{{color:#f0545c}}
+</style></head><body><div class="card">
+<b>BigSam · place order on MT5</b><code>{summ}</code><div>Status: <b id="st">{html.escape(state)}</b></div>
+{"" if state != "ready" else f'''<button class="p" id="here">Place order on MT5</button>
+<form id="login"><div class="m" style="margin-top:0">Sign in once on this phone (stays signed in for 14 days):</div>
+<input name="username" autocomplete="username" placeholder="Username" value="admin" required>
+<input name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+<button class="p" type="submit">Sign in and place order</button></form>
+<a class="btn s" href="{sc}">Use iPhone Shortcut instead</a>'''}
+<div class="m" id="msg">A pending limit order with stop loss and take profit. Nothing is sent until you confirm.</div>
 </div><script>
-const b=document.getElementById("here");
-if(b) b.onclick=async()=>{{ if(!confirm("Place this order on MT5?")) return; b.disabled=true;
+const b=document.getElementById("here"), lf=document.getElementById("login"), msg=document.getElementById("msg");
+const show=(t,c)=>{{ msg.textContent=t; msg.className="m "+(c||""); }};
+async function place(){{
   const r=await fetch("../api/exec/{token}/place",{{method:"POST",credentials:"same-origin"}});
+  if(r.status===401){{ lf.style.display="block"; b.style.display="none"; show("Sign in to confirm this order."); return; }}
   const d=await r.json().catch(()=>({{}}));
-  document.getElementById("msg").textContent = r.status===401 ? "Log in to the dashboard in this browser first, or use the Shortcut." : (d.message||d.detail||"Done");
-  b.disabled=false; }};
+  show(d.message||d.detail||"Done", d.ok?"ok":"bad");
+  if(d.ok){{ b.style.display="none"; lf.style.display="none"; document.getElementById("st").textContent="approved"; }}
+}}
+if(b) b.onclick=async()=>{{ if(!confirm("Place this order on MT5?")) return; b.disabled=true; await place(); b.disabled=false; }};
+if(lf) lf.onsubmit=async(e)=>{{ e.preventDefault(); const f=new FormData(lf);
+  const r=await fetch("../api/login",{{method:"POST",credentials:"same-origin",headers:{{"Content-Type":"application/json"}},
+    body:JSON.stringify({{username:f.get("username"),password:f.get("password")}})}});
+  if(!r.ok){{ const d=await r.json().catch(()=>({{}})); show(d.detail||"Sign-in failed","bad"); return; }}
+  await place(); }};
 </script></body></html>"""
     return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
